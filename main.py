@@ -168,7 +168,7 @@ def main():
     print(f"  MAE: {prediction_results['mae']:.4f}")
     print(f"  R²: {prediction_results['r2']:.4f}")
     
-    # Show prediction scatter plot
+    # Save prediction scatter plot
     plt.figure(figsize=(10, 6))
     plt.scatter(prediction_results['actual'], prediction_results['predicted'], alpha=0.6)
     plt.plot([min(prediction_results['actual']), max(prediction_results['actual'])], 
@@ -179,9 +179,9 @@ def main():
     plt.grid(True)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'unseen_predictions.png'))
-    plt.show()
+    plt.close()  # Close the figure instead of showing it
     
-    # Show residuals plot
+    # Save residuals plot
     plt.figure(figsize=(10, 6))
     residuals = np.array(prediction_results['predicted']) - np.array(prediction_results['actual'])
     plt.scatter(prediction_results['predicted'], residuals, alpha=0.6)
@@ -192,7 +192,32 @@ def main():
     plt.grid(True)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'residuals.png'))
-    plt.show()
+    plt.close()  # Close the figure instead of showing it
+    
+    # Save a summary of results to a text file
+    with open(os.path.join(output_dir, 'results_summary.txt'), 'w') as f:
+        f.write(f"GNNSol Molecular Solubility Prediction Results\n")
+        f.write(f"Run date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        f.write(f"Training metrics:\n")
+        f.write(f"  RMSE: {train_metrics['rmse']:.4f}\n")
+        f.write(f"  MAE: {train_metrics['mae']:.4f}\n")
+        f.write(f"  R²: {train_metrics['r2']:.4f}\n\n")
+        f.write(f"Test metrics:\n")
+        f.write(f"  RMSE: {test_metrics['rmse']:.4f}\n")
+        f.write(f"  MAE: {test_metrics['mae']:.4f}\n")
+        f.write(f"  R²: {test_metrics['r2']:.4f}\n\n")
+        f.write(f"Unseen prediction set metrics:\n")
+        f.write(f"  RMSE: {prediction_results['rmse']:.4f}\n")
+        f.write(f"  MAE: {prediction_results['mae']:.4f}\n")
+        f.write(f"  R²: {prediction_results['r2']:.4f}\n\n")
+        f.write(f"Sample predictions:\n")
+        for i in range(min(5, len(prediction_results['smiles']))):
+            f.write(f"Molecule: {prediction_results['smiles'][i]}\n")
+            f.write(f"  Actual: {prediction_results['actual'][i]:.4f}, Predicted: {prediction_results['predicted'][i]:.4f}, ")
+            f.write(f"Error: {abs(prediction_results['actual'][i] - prediction_results['predicted'][i]):.4f}\n")
+    
+    # Save model state dictionary
+    torch.save(best_model_state, os.path.join(output_dir, 'best_model.pt'))
     
     total_time = time.time() - start_time
     print(f"\nSolubility prediction completed in {total_time:.1f} seconds")
@@ -394,7 +419,7 @@ def train_solubility_model(train_df, epochs=300, batch_size=32, output_dir=None)
         plt.savefig(os.path.join(output_dir, 'training_progress.png'))
     else:
         plt.savefig('training_progress.png')
-    plt.show()
+    plt.close()  # Close the figure instead of showing it
     
     return model, train_metrics, test_metrics, best_model_state
 
