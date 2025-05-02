@@ -20,6 +20,7 @@ import pandas as pd
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 import time
 import datetime
+import os
 
 # %% Molecular Graph Construction
 class MoleculeGraphConverter:
@@ -110,7 +111,16 @@ class MolecularGNN(torch.nn.Module):
 # %% Main execution
 def main():
     start_time = time.time()
+    # Create model_output_evaluation directory and unique results folder inside it
+    parent_output_dir = os.path.join(os.getcwd(), "model_output_evaluation")
+    os.makedirs(parent_output_dir, exist_ok=True)
+    
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = os.path.join(parent_output_dir, f"results_{timestamp}")
+    os.makedirs(output_dir, exist_ok=True)
+    
     print(f"Starting molecular solubility prediction at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Output files will be saved in: {output_dir}")
     print(f"PyTorch version: {torch.__version__}")
     
     # Step 1: Load ESOL dataset
@@ -134,7 +144,7 @@ def main():
     
     # Step 3: Process data and train model
     print("\n3. Training model on ESOL dataset...")
-    model, train_metrics, test_metrics, best_model_state = train_solubility_model(train_df)
+    model, train_metrics, test_metrics, best_model_state = train_solubility_model(train_df, output_dir=output_dir)
     
     # Step 4: Evaluate performance
     print("\n4. Evaluating model performance")
@@ -168,7 +178,7 @@ def main():
     plt.title('Unseen Molecules: Predicted vs Actual Solubility')
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig('unseen_predictions.png')
+    plt.savefig(os.path.join(output_dir, 'unseen_predictions.png'))
     plt.show()
     
     # Show residuals plot
@@ -181,11 +191,12 @@ def main():
     plt.title('Residuals Plot')
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig('residuals.png')
+    plt.savefig(os.path.join(output_dir, 'residuals.png'))
     plt.show()
     
     total_time = time.time() - start_time
     print(f"\nSolubility prediction completed in {total_time:.1f} seconds")
+    print(f"Results saved in: {output_dir}")
 
 def load_esol_dataset():
     """Load the ESOL dataset for molecular solubility prediction"""
@@ -215,7 +226,7 @@ def load_esol_dataset():
         print(f"Error loading ESOL dataset: {e}")
         return None
 
-def train_solubility_model(train_df, epochs=300, batch_size=32):
+def train_solubility_model(train_df, epochs=300, batch_size=32, output_dir=None):
     """Train the GNN model on training data"""
     converter = MoleculeGraphConverter()
     solubility_col = 'solubility'  # We renamed it in load_esol_dataset
@@ -379,7 +390,10 @@ def train_solubility_model(train_df, epochs=300, batch_size=32):
     plt.ylabel('MSE Loss')
     plt.title('Training Progress')
     plt.legend()
-    plt.savefig('training_progress.png')
+    if output_dir:
+        plt.savefig(os.path.join(output_dir, 'training_progress.png'))
+    else:
+        plt.savefig('training_progress.png')
     plt.show()
     
     return model, train_metrics, test_metrics, best_model_state
