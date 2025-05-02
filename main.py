@@ -1,15 +1,25 @@
-# %% Imports
+"""
+Streamlined GNN for Molecular Solubility Prediction
+This script focuses only on:
+1. Loading ESOL dataset
+2. Keeping a percentage of molecules as unseen prediction set
+3. Training and testing the model
+4. Evaluating performance
+5. Keeping the best model
+6. Predicting solubility of unseen molecules
+7. Reporting results
+"""
+
 import torch
-import os
 import numpy as np
 import matplotlib.pyplot as plt
-import networkx as nx
 from rdkit import Chem
-from rdkit.Chem import AllChem, Descriptors
 from rdkit.Chem import Draw
 from sklearn.model_selection import train_test_split
 import pandas as pd
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+import time
+import datetime
 
 # %% Molecular Graph Construction
 class MoleculeGraphConverter:
@@ -61,7 +71,7 @@ class MoleculeGraphConverter:
             'smiles': smiles
         }
 
-# %% GNN Model Definition for Molecular Property Prediction
+# %% GNN Model Definition
 class MolecularGNN(torch.nn.Module):
     def __init__(self, in_features, hidden_features, latent_dim, out_features):
         super(MolecularGNN, self).__init__()
@@ -97,416 +107,343 @@ class MolecularGNN(torch.nn.Module):
         out = self.fc_out(graph_embedding)
         return latent, out
 
-# %% Sample Data
-# Sample SMILES with solubility data (LogS values)
-sample_data = [
-    ("CC(=O)OC1=CC=CC=C1C(=O)O", -1.72),  # Aspirin
-    ("CN1C=NC2=C1C(=O)N(C(=O)N2C)C", -0.79),  # Caffeine
-    ("CC(C)CC1=CC=C(C=C1)C(C)C(=O)O", -3.97),  # Ibuprofen
-    ("CN1C=NC2=C1C(=O)NC(=O)N2C", -1.16),  # Theophylline
-    ("CCO", 0.14),  # Ethanol
-    ("C1=CC=C(C=C1)O", -0.05),  # Phenol
-    ("CC(C)(C)C", -3.21),  # tert-Butane
-    ("CCCCCC", -3.76),  # Hexane
-]
-
-# %% Setup and Run Model
-if __name__ == "__main__":
-    print("Molecular GNN application starting...")
+# %% Main execution
+def main():
+    start_time = time.time()
+    print(f"Starting molecular solubility prediction at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"PyTorch version: {torch.__version__}")
+    
+    # Step 1: Load ESOL dataset
+    print("\n1. Loading ESOL dataset for molecular solubility prediction...")
+    esol_df = load_esol_dataset()
+    if esol_df is None:
+        print("Failed to load dataset. Exiting.")
+        return
+    
+    print(f"Dataset shape: {esol_df.shape}")
+    print("Sample data:")
+    print(esol_df.head())
+    
+    # Step 2: Split into training and unseen prediction sets
+    prediction_set_size = 0.1  # 10% of data kept as unseen prediction set
+    print(f"\n2. Splitting dataset - keeping {prediction_set_size*100:.0f}% as unseen prediction set")
+    
+    train_df, prediction_df = train_test_split(esol_df, test_size=prediction_set_size, random_state=42)
+    print(f"Training set: {len(train_df)} molecules")
+    print(f"Unseen prediction set: {len(prediction_df)} molecules")
+    
+    # Step 3: Process data and train model
+    print("\n3. Training model on ESOL dataset...")
+    model, train_metrics, test_metrics, best_model_state = train_solubility_model(train_df)
+    
+    # Step 4: Evaluate performance
+    print("\n4. Evaluating model performance")
+    print(f"Training metrics: RMSE={train_metrics['rmse']:.4f}, MAE={train_metrics['mae']:.4f}, R²={train_metrics['r2']:.4f}")
+    print(f"Test metrics: RMSE={test_metrics['rmse']:.4f}, MAE={test_metrics['mae']:.4f}, R²={test_metrics['r2']:.4f}")
+    
+    # Step 5: Keep best model
+    print("\n5. Loading best model from training")
+    if best_model_state:
+        model.load_state_dict(best_model_state)
+        print("Best model loaded successfully")
+    
+    # Step 6: Predict solubility for unseen molecules
+    print("\n6. Predicting solubility for unseen molecules")
+    prediction_results = predict_unseen_molecules(model, prediction_df)
+    
+    # Step 7: Report results
+    print("\n7. Final results")
+    print(f"Unseen prediction set metrics:")
+    print(f"  RMSE: {prediction_results['rmse']:.4f}")
+    print(f"  MAE: {prediction_results['mae']:.4f}")
+    print(f"  R²: {prediction_results['r2']:.4f}")
+    
+    # Show prediction scatter plot
+    plt.figure(figsize=(10, 6))
+    plt.scatter(prediction_results['actual'], prediction_results['predicted'], alpha=0.6)
+    plt.plot([min(prediction_results['actual']), max(prediction_results['actual'])], 
+             [min(prediction_results['actual']), max(prediction_results['actual'])], 'k--')
+    plt.xlabel('Actual LogS')
+    plt.ylabel('Predicted LogS')
+    plt.title('Unseen Molecules: Predicted vs Actual Solubility')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig('unseen_predictions.png')
+    plt.show()
+    
+    # Show residuals plot
+    plt.figure(figsize=(10, 6))
+    residuals = np.array(prediction_results['predicted']) - np.array(prediction_results['actual'])
+    plt.scatter(prediction_results['predicted'], residuals, alpha=0.6)
+    plt.axhline(y=0, color='r', linestyle='-')
+    plt.xlabel('Predicted LogS')
+    plt.ylabel('Residuals')
+    plt.title('Residuals Plot')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig('residuals.png')
+    plt.show()
+    
+    total_time = time.time() - start_time
+    print(f"\nSolubility prediction completed in {total_time:.1f} seconds")
 
-    # Initialize SMILES to graph converter
+def load_esol_dataset():
+    """Load the ESOL dataset for molecular solubility prediction"""
+    try:
+        url = "https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/delaney-processed.csv"
+        df = pd.read_csv(url)
+        print(f"Successfully loaded {len(df)} molecules from ESOL dataset")
+        
+        # Check for solubility column
+        solubility_col = 'measured log solubility in mols per litre'
+        if solubility_col not in df.columns:
+            solubility_cols = [col for col in df.columns if 'solubility' in col.lower()]
+            if solubility_cols:
+                solubility_col = solubility_cols[0]
+                print(f"Using solubility column: {solubility_col}")
+            else:
+                print("No solubility column found in dataset")
+                return None
+        
+        # Keep only necessary columns
+        df = df[['smiles', solubility_col, 'Compound ID']]
+        df.rename(columns={solubility_col: 'solubility'}, inplace=True)
+        
+        return df
+        
+    except Exception as e:
+        print(f"Error loading ESOL dataset: {e}")
+        return None
+
+def train_solubility_model(train_df, epochs=300, batch_size=32):
+    """Train the GNN model on training data"""
     converter = MoleculeGraphConverter()
-
-    # %% Process a sample molecule
-    smiles = sample_data[0][0]  # Aspirin
-    mol_graph = converter.smiles_to_graph(smiles)
-
-    if mol_graph:
-        adj_matrix = mol_graph['adj_matrix']
-        node_features = mol_graph['node_features']
-        mol = mol_graph['mol']
-        
-        # Display molecule
-        print(f"Processing molecule: {smiles}")
-        print(f"Number of atoms: {mol.GetNumAtoms()}")
-        print(f"Node features shape: {node_features.shape}")
-        
-        # Create a molecular GNN model
-        feature_dim = node_features.shape[1]
-        model = MolecularGNN(in_features=feature_dim, hidden_features=64, latent_dim=32, out_features=1)
-        
-        # Forward pass
-        latent, output = model(node_features, adj_matrix)
-        
-        print(f"Latent representation shape: {latent.shape}")
-        print(f"Predicted property: {output.item():.4f}")
-        print(f"Actual LogS value: {sample_data[0][1]}")
-        
-        # Visualize the molecule
-        img = Draw.MolToImage(mol, size=(400, 400))
-        plt.figure(figsize=(8, 8))
-        plt.imshow(img)
-        plt.axis('off')
-        plt.title(f"{Chem.MolToSmiles(mol)}\nActual LogS: {sample_data[0][1]}")
-        plt.show()
-
-    # %% Process and visualize all molecules - Training function
-    def train_model(model, data, epochs=100):
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-        loss_fn = torch.nn.MSELoss()
-        
-        # Process all molecules
-        X = []
-        y = []
-        
-        for smiles, logs in data:
+    solubility_col = 'solubility'  # We renamed it in load_esol_dataset
+    
+    # Process all molecules
+    print("Processing molecules...")
+    X = []
+    y = []
+    failed_count = 0
+    
+    for _, row in train_df.iterrows():
+        try:
+            smiles = row['smiles']
+            solubility = row[solubility_col]
+            
             mol_graph = converter.smiles_to_graph(smiles)
             if mol_graph:
                 X.append((mol_graph['node_features'], mol_graph['adj_matrix'], mol_graph['mol']))
-                y.append(logs)
+                y.append(solubility)
+        except Exception as e:
+            failed_count += 1
+            if failed_count < 5:
+                print(f"Error processing molecule {row['smiles']}: {e}")
+            elif failed_count == 5:
+                print("Additional errors occurred but not displayed...")
+    
+    print(f"Successfully processed {len(X)} molecules. Failed: {failed_count}")
+    
+    # Train-validation-test split (70-15-15)
+    X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=42)
+    X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
+    
+    print(f"Train: {len(X_train)}, Validation: {len(X_val)}, Test: {len(X_test)} molecules")
+    
+    # Create model
+    feature_dim = X_train[0][0].shape[1]
+    model = MolecularGNN(in_features=feature_dim, hidden_features=128, latent_dim=64, out_features=1)
+    
+    # Training setup
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-5)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=20, factor=0.5, verbose=True)
+    loss_fn = torch.nn.MSELoss()
+    
+    # Training loop
+    train_losses = []
+    val_losses = []
+    best_model_state = None
+    best_val_loss = float('inf')
+    patience = 30
+    no_improve = 0
+    
+    print(f"Starting training for {epochs} epochs...")
+    for epoch in range(epochs):
+        # Training phase
+        model.train()
+        train_loss = 0
         
-        # Train-test split
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-        
-        # Training loop
-        train_losses = []
-        test_losses = []
-        
-        for epoch in range(epochs):
-            model.train()
-            train_loss = 0
+        # Process in batches
+        indices = np.random.permutation(len(X_train))
+        for i in range(0, len(indices), batch_size):
+            batch_indices = indices[i:i+batch_size]
+            batch_loss = 0
             
-            # Train on each molecule
-            for (features, adj, _), target in zip(X_train, y_train):
+            for idx in batch_indices:
+                features, adj, _ = X_train[idx]
+                target = y_train[idx]
+                
                 optimizer.zero_grad()
                 _, pred = model(features, adj)
                 loss = loss_fn(pred, torch.tensor([[target]], dtype=torch.float))
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
-                train_loss += loss.item()
+                
+                batch_loss += loss.item()
             
-            train_loss /= len(X_train)
-            train_losses.append(train_loss)
-            
-            # Evaluate on test set
-            model.eval()
-            test_loss = 0
-            with torch.no_grad():
-                for (features, adj, _), target in zip(X_test, y_test):
-                    _, pred = model(features, adj)
-                    loss = loss_fn(pred, torch.tensor([[target]], dtype=torch.float))
-                    test_loss += loss.item()
-            
-            test_loss /= len(X_test)
-            test_losses.append(test_loss)
-            
-            if (epoch + 1) % 10 == 0:
-                print(f"Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.4f}, Test Loss: {test_loss:.4f}")
+            train_loss += batch_loss / len(batch_indices)
         
-        return model, train_losses, test_losses, X_test, y_test
-
-    # Train the model
-    print("\nTraining model on sample data...")
-    feature_dim = node_features.shape[1]
-    full_model = MolecularGNN(in_features=feature_dim, hidden_features=64, latent_dim=32, out_features=1)
-    trained_model, train_losses, test_losses, X_test, y_test = train_model(full_model, sample_data, epochs=50)
-
-    # %% Visualize training progress
+        train_loss /= (len(indices) // batch_size + (1 if len(indices) % batch_size != 0 else 0))
+        train_losses.append(train_loss)
+        
+        # Validation phase
+        model.eval()
+        val_loss = 0
+        val_preds = []
+        val_targets = []
+        
+        with torch.no_grad():
+            for i, (features_adj_mol, target) in enumerate(zip(X_val, y_val)):
+                features, adj, _ = features_adj_mol
+                _, pred = model(features, adj)
+                val_preds.append(pred.item())
+                val_targets.append(target)
+                
+                loss = loss_fn(pred, torch.tensor([[target]], dtype=torch.float))
+                val_loss += loss.item()
+        
+        val_loss /= len(X_val)
+        val_losses.append(val_loss)
+        
+        # Update learning rate
+        scheduler.step(val_loss)
+        
+        # Check for improvement
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_model_state = model.state_dict().copy()
+            no_improve = 0
+        else:
+            no_improve += 1
+        
+        # Early stopping
+        if no_improve >= patience:
+            print(f"Early stopping at epoch {epoch+1} - no improvement for {patience} epochs")
+            break
+        
+        # Print progress
+        if (epoch + 1) % 20 == 0:
+            print(f"Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}")
+    
+    # Final evaluation on training set
+    model.eval()
+    train_preds = []
+    train_targets = []
+    
+    with torch.no_grad():
+        for features_adj_mol, target in zip(X_train, y_train):
+            features, adj, _ = features_adj_mol
+            _, pred = model(features, adj)
+            train_preds.append(pred.item())
+            train_targets.append(target)
+    
+    train_metrics = {
+        'rmse': np.sqrt(mean_squared_error(train_targets, train_preds)),
+        'mae': mean_absolute_error(train_targets, train_preds),
+        'r2': r2_score(train_targets, train_preds)
+    }
+    
+    # Final evaluation on test set
+    test_preds = []
+    test_targets = []
+    
+    with torch.no_grad():
+        for features_adj_mol, target in zip(X_test, y_test):
+            features, adj, _ = features_adj_mol
+            _, pred = model(features, adj)
+            test_preds.append(pred.item())
+            test_targets.append(target)
+    
+    test_metrics = {
+        'rmse': np.sqrt(mean_squared_error(test_targets, test_preds)),
+        'mae': mean_absolute_error(test_targets, test_preds),
+        'r2': r2_score(test_targets, test_preds)
+    }
+    
+    # Visualize training progress
     plt.figure(figsize=(10, 5))
     plt.plot(train_losses, label='Training Loss')
-    plt.plot(test_losses, label='Test Loss')
+    plt.plot(val_losses, label='Validation Loss')
     plt.xlabel('Epoch')
     plt.ylabel('MSE Loss')
     plt.title('Training Progress')
     plt.legend()
+    plt.savefig('training_progress.png')
     plt.show()
     
-    # %% Evaluate model predictions
-    print("\nEvaluating model predictions...")
-    trained_model.eval()
-    predictions = []
+    return model, train_metrics, test_metrics, best_model_state
+
+def predict_unseen_molecules(model, prediction_df):
+    """Predict solubility for unseen molecules"""
+    converter = MoleculeGraphConverter()
+    solubility_col = 'solubility'
+    
+    predicted_values = []
     actual_values = []
+    smiles_list = []
+    failed_molecules = []
     
-    with torch.no_grad():
-        for (features, adj, mol), target in zip(X_test, y_test):
-            _, pred = trained_model(features, adj)
-            pred_value = pred.item()
-            predictions.append(pred_value)
-            actual_values.append(target)
-            print(f"Molecule: {Chem.MolToSmiles(mol)}")
-            print(f"  Actual: {target:.4f}, Predicted: {pred_value:.4f}, Error: {abs(target - pred_value):.4f}")
+    print(f"Predicting solubility for {len(prediction_df)} unseen molecules...")
     
-    # Calculate metrics
-    rmse = np.sqrt(mean_squared_error(actual_values, predictions))
-    r2 = r2_score(actual_values, predictions)
-    print(f"\nOverall metrics - RMSE: {rmse:.4f}, R²: {r2:.4f}")
-    
-    # Plot predictions vs actual
-    plt.figure(figsize=(8, 8))
-    plt.scatter(actual_values, predictions)
-    plt.plot([min(actual_values), max(actual_values)], [min(actual_values), max(actual_values)], 'k--')
-    plt.xlabel('Actual LogS')
-    plt.ylabel('Predicted LogS')
-    plt.title('Model Predictions vs Actual Values')
-    plt.grid(True)
-    plt.show()
-    
-    # %% Load and train on large solubility dataset (ESOL)
-    print("\n" + "="*50)
-    print("TRAINING ON LARGE SOLUBILITY DATASET (ESOL)")
-    print("="*50)
-    
-    def load_esol_dataset():
-        """Load the ESOL dataset for molecular solubility prediction"""
-        print("Loading ESOL dataset for molecular solubility prediction...")
-        
+    for _, row in prediction_df.iterrows():
         try:
-            # Try to download the ESOL dataset
-            url = "https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/delaney-processed.csv"
-            df = pd.read_csv(url)
-            print(f"Successfully loaded {len(df)} molecules from ESOL dataset")
-            print("Available columns:", df.columns.tolist())
-        except Exception as e:
-            print(f"Error loading ESOL dataset: {e}")
-            print("Using backup simplified dataset...")
-            # If download fails, use a minimal dataset as backup
-            df = pd.DataFrame({
-                'smiles': [item[0] for item in sample_data],
-                'measured log solubility in mols per litre': [item[1] for item in sample_data],
-                'Compound ID': ['Compound_' + str(i) for i in range(len(sample_data))]
-            })
-        
-        return df
-    
-    # Load the ESOL dataset
-    esol_df = load_esol_dataset()
-    print(f"Dataset shape: {esol_df.shape}")
-    print(esol_df.head())
-    
-    def train_on_esol(max_molecules=800, epochs=300):
-        """Train a GNN model on the ESOL dataset"""
-        if 'measured log solubility in mols per litre' not in esol_df.columns:
-            print("Could not find solubility column. Using ESOL predicted values instead.")
-            solubility_col = [col for col in esol_df.columns if 'solubility' in col.lower()][0]
-        else:
-            solubility_col = 'measured log solubility in mols per litre'
+            smiles = row['smiles']
+            actual_solubility = row[solubility_col]
             
-        print(f"Using solubility values from column: {solubility_col}")
-        
-        # Sample a subset if dataset is large
-        if len(esol_df) > max_molecules:
-            df_subset = esol_df.sample(max_molecules, random_state=42)
-        else:
-            df_subset = esol_df
-        
-        print(f"Training on {len(df_subset)} molecules from ESOL dataset")
-        
-        # Process all molecules
-        X = []
-        y = []
-        failed_count = 0
-        
-        for _, row in df_subset.iterrows():
-            try:
-                smiles = row['smiles']
-                solubility = row[solubility_col]
-                
-                mol_graph = converter.smiles_to_graph(smiles)
-                if mol_graph:
-                    X.append((mol_graph['node_features'], mol_graph['adj_matrix'], mol_graph['mol']))
-                    y.append(solubility)
-            except Exception as e:
-                failed_count += 1
-                if failed_count < 5:
-                    print(f"Error processing molecule {row['smiles']}: {e}")
-                elif failed_count == 5:
-                    print("Additional errors occurred but not displayed...")
-        
-        print(f"Successfully processed {len(X)} molecules. Failed: {failed_count}")
-        
-        # Train-test split with 15% test set
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.15, random_state=42)
-        
-        # Create a new model
-        if len(X_train) > 0:
-            feature_dim = X_train[0][0].shape[1]
-            model = MolecularGNN(in_features=feature_dim, hidden_features=128, latent_dim=64, out_features=1)
-            
-            # Training with AdamW optimizer
-            optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-5)
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=20, factor=0.5)
-            loss_fn = torch.nn.MSELoss()
-            
-            # Training loop
-            train_losses = []
-            test_losses = []
-            best_model = None
-            best_rmse = float('inf')
-            
-            print(f"Starting training for {epochs} epochs...")
-            for epoch in range(epochs):
-                model.train()
-                train_loss = 0
-                
-                # Train on each molecule
-                for (features, adj, _), target in zip(X_train, y_train):
-                    optimizer.zero_grad()
-                    _, pred = model(features, adj)
-                    loss = loss_fn(pred, torch.tensor([[target]], dtype=torch.float))
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                    optimizer.step()
-                    train_loss += loss.item()
-                
-                train_loss /= len(X_train)
-                train_losses.append(train_loss)
-                
-                # Evaluate on test set
+            mol_graph = converter.smiles_to_graph(smiles)
+            if mol_graph:
+                # Make prediction
                 model.eval()
-                test_loss = 0
-                test_preds = []
-                test_targets = []
-                
                 with torch.no_grad():
-                    for (features, adj, _), target in zip(X_test, y_test):
-                        _, pred = model(features, adj)
-                        pred_value = pred.item()
-                        test_preds.append(pred_value)
-                        test_targets.append(target)
-                        
-                        loss = loss_fn(pred, torch.tensor([[target]], dtype=torch.float))
-                        test_loss += loss.item()
-                
-                test_loss /= len(X_test)
-                test_losses.append(test_loss)
-                
-                # Calculate RMSE
-                rmse = np.sqrt(mean_squared_error(test_targets, test_preds))
-                r2 = r2_score(test_targets, test_preds)
-                
-                scheduler.step(rmse)
-                
-                # Save best model
-                if rmse < best_rmse:
-                    best_rmse = rmse
-                    best_model = model.state_dict().copy()
-                
-                if (epoch + 1) % 20 == 0:
-                    print(f"Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.4f}, Test RMSE: {rmse:.4f}, R²: {r2:.4f}")
-            
-            # Load best model
-            if best_model:
-                model.load_state_dict(best_model)
-            
-            print(f"\nTraining complete! Best RMSE: {best_rmse:.4f}")
-            
-            # Final evaluation
-            model.eval()
-            test_preds = []
-            test_targets = []
-            
-            with torch.no_grad():
-                for (features, adj, _), target in zip(X_test, y_test):
-                    _, pred = model(features, adj)
-                    test_preds.append(pred.item())
-                    test_targets.append(target)
-            
-            # Calculate final metrics
-            rmse = np.sqrt(mean_squared_error(test_targets, test_preds))
-            r2 = r2_score(test_targets, test_preds)
-            
-            print(f"Final Test RMSE: {rmse:.4f}, R²: {r2:.4f}")
-            
-            # Plot predictions
-            plt.figure(figsize=(10, 6))
-            plt.scatter(test_targets, test_preds, alpha=0.6)
-            plt.plot([min(test_targets), max(test_targets)], [min(test_targets), max(test_targets)], 'k--')
-            plt.xlabel('Actual LogS')
-            plt.ylabel('Predicted LogS')
-            plt.title('ESOL Model: Predicted vs Actual Solubility')
-            plt.grid(True)
-            plt.show()
-            
-            return model, X_test, y_test
-        else:
-            print("No valid molecules were processed. Cannot train the model.")
-            return None, None, None
-    
-    # Train on the ESOL dataset
-    esol_model, esol_X_test, esol_y_test = train_on_esol(max_molecules=800, epochs=300)
-    
-    # %% Predict solubility for unseen molecules
-    def predict_solubility(model, smiles_list):
-        """Predict solubility for a list of unseen molecules"""
-        print("\n" + "="*50)
-        print("PREDICTING SOLUBILITY FOR UNSEEN MOLECULES")
-        print("="*50)
-        
-        results = []
-        
-        for smiles in smiles_list:
-            try:
-                # Process the molecule
-                mol_graph = converter.smiles_to_graph(smiles)
-                if mol_graph:
                     node_features = mol_graph['node_features']
                     adj_matrix = mol_graph['adj_matrix']
-                    mol = mol_graph['mol']
-                    
-                    # Make prediction
-                    model.eval()
-                    with torch.no_grad():
-                        _, pred = model(node_features, adj_matrix)
-                        pred_value = pred.item()
-                    
-                    # Get molecule name or formula
-                    mol_name = Chem.MolToSmiles(mol)
-                    
-                    print(f"Molecule: {mol_name}")
-                    print(f"Predicted solubility (LogS): {pred_value:.4f}")
-                    
-                    # Visualize the molecule
-                    img = Draw.MolToImage(mol, size=(300, 300))
-                    plt.figure(figsize=(5, 5))
-                    plt.imshow(img)
-                    plt.axis('off')
-                    plt.title(f"{mol_name}\nPredicted LogS: {pred_value:.4f}")
-                    plt.show()
-                    
-                    results.append((mol, mol_name, pred_value))
-                else:
-                    print(f"Failed to process SMILES: {smiles}")
-            except Exception as e:
-                print(f"Error predicting for {smiles}: {e}")
-        
-        return results
+                    _, pred = model(node_features, adj_matrix)
+                    pred_value = pred.item()
+                
+                predicted_values.append(pred_value)
+                actual_values.append(actual_solubility)
+                smiles_list.append(smiles)
+            else:
+                failed_molecules.append((smiles, "Could not convert to graph"))
+        except Exception as e:
+            failed_molecules.append((smiles, str(e)))
     
-    # Test the trained model on unseen molecules
-    if esol_model:
-        # Example unseen molecules
-        unseen_molecules = [
-            "C1=CC=CC(=C1)C(=O)O",  # Benzoic acid
-            "CC(C)COC(=O)C=C",       # Isobutyl acrylate
-            "CCS(=O)(=O)C1=CC=CC=C1", # Ethyl benzenesulfonate
-            "CC(C)(C)C(=O)OC1=CC=CC=C1", # Phenyl pivalate
-            "CC(=O)OCCOC(=O)C"        # Ethylene glycol diacetate
-        ]
-        
-        prediction_results = predict_solubility(esol_model, unseen_molecules)
-        
-        # Compare different molecules in a bar chart
-        if len(prediction_results) > 1:
-            plt.figure(figsize=(12, 6))
-            molecules = [result[1][:20] + '...' if len(result[1]) > 20 else result[1] for result in prediction_results]
-            values = [result[2] for result in prediction_results]
-            
-            plt.bar(molecules, values)
-            plt.xlabel('Molecule')
-            plt.ylabel('Predicted LogS')
-            plt.title('Predicted Solubility for Unseen Molecules')
-            plt.xticks(rotation=45, ha='right')
-            plt.tight_layout()
-            plt.show()
+    print(f"Successfully predicted {len(predicted_values)} molecules")
+    print(f"Failed to predict {len(failed_molecules)} molecules")
     
-    print("GNN application completed!")
+    # Sample of predictions
+    print("\nSample predictions:")
+    for i in range(min(5, len(predicted_values))):
+        print(f"Molecule: {smiles_list[i]}")
+        print(f"  Actual: {actual_values[i]:.4f}, Predicted: {predicted_values[i]:.4f}, "
+              f"Error: {abs(actual_values[i] - predicted_values[i]):.4f}")
+    
+    # Calculate metrics
+    rmse = np.sqrt(mean_squared_error(actual_values, predicted_values))
+    mae = mean_absolute_error(actual_values, predicted_values)
+    r2 = r2_score(actual_values, predicted_values)
+    
+    # Return results
+    return {
+        'predicted': predicted_values,
+        'actual': actual_values,
+        'smiles': smiles_list,
+        'rmse': rmse,
+        'mae': mae,
+        'r2': r2,
+        'failed': failed_molecules
+    }
+
+if __name__ == "__main__":
+    main()
