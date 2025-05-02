@@ -1,0 +1,15 @@
+version: '3'
+
+services:
+  gnn:
+    container_name: GNN
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gnn-image:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./model:/app/model
+      - ./logs:/app/logs

@@ -1,0 +1,12 @@
+# Ignore the following files and directories when packaging the extension
+.vscode/
+node_modules/
+dist/
+*.ts
+*.map
+*.test.ts
+*.spec.ts
+*.log
+*.md
+.DS_Store
+npm-debug.log*
