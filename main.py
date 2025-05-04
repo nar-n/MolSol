@@ -14,7 +14,12 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from rdkit import Chem
-from rdkit.Chem import Draw
+from rdkit.Chem import Draw, Descriptors, Lipinski, rdMolDescriptors
+# Import QED properly or provide alternative
+try:
+    from rdkit.Chem import QED  # In newer versions of RDKit, QED is a separate module
+except ImportError:
+    QED = None
 from sklearn.model_selection import train_test_split
 import pandas as pd
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
@@ -29,6 +34,44 @@ class MoleculeGraphConverter:
         self.atom_features = {
             'atomic_num': [1, 6, 7, 8, 9, 15, 16, 17, 35, 53],  # H, C, N, O, F, P, S, Cl, Br, I
         }
+        
+    def calculate_physchem_descriptors(self, mol):
+        """Calculate physicochemical descriptors for a molecule"""
+        descriptors = []
+        
+        try:
+            # Calculate basic molecular properties
+            descriptors.append(Descriptors.MolWt(mol))            # Molecular Weight
+            descriptors.append(Descriptors.MolLogP(mol))           # LogP
+            descriptors.append(Lipinski.NumHDonors(mol))           # H-bond donors
+            descriptors.append(Lipinski.NumHAcceptors(mol))        # H-bond acceptors
+            descriptors.append(rdMolDescriptors.CalcTPSA(mol))     # Topological Polar Surface Area
+            descriptors.append(Lipinski.NumRotatableBonds(mol))    # Number of rotatable bonds
+            descriptors.append(rdMolDescriptors.CalcNumRings(mol)) # Number of rings
+            
+            # Add more complex descriptors
+            descriptors.append(rdMolDescriptors.CalcFractionCSP3(mol))  # Fraction of sp3 carbons
+            descriptors.append(Descriptors.NumAromaticRings(mol))       # Number of aromatic rings  
+            descriptors.append(Chem.rdMolDescriptors.CalcNumHeteroatoms(mol)) # Number of heteroatoms
+            
+            # Water solubility-related descriptors
+            descriptors.append(Chem.Crippen.MolMR(mol))            # Molar refractivity
+            descriptors.append(Descriptors.LabuteASA(mol))         # Labute Accessible Surface Area
+            
+            # Drug-likeness - Handle QED differently based on availability
+            if QED is not None:
+                descriptors.append(QED.qed(mol))           # QED drug-likeness score
+            else:
+                # Alternative: use a fixed value or omit this feature
+                descriptors.append(0.5)  # Default mid-range value
+        
+        except Exception as e:
+            print(f"Warning: Error calculating descriptors for molecule: {e}")
+            # Return a vector of zeros with the appropriate length
+            # 12 features (13 with QED)
+            return torch.zeros(1, 13, dtype=torch.float)
+        
+        return torch.tensor(descriptors, dtype=torch.float).reshape(1, -1)
         
     def smiles_to_graph(self, smiles):
         """Convert SMILES string to molecular graph with node and edge features"""
@@ -65,31 +108,40 @@ class MoleculeGraphConverter:
             
             node_features.append(features)
         
+        # Calculate physicochemical descriptors
+        physchem_descriptors = self.calculate_physchem_descriptors(mol)
+        
         return {
             'mol': mol,
             'adj_matrix': adj_matrix,
             'node_features': torch.tensor(node_features, dtype=torch.float),
+            'physchem_features': physchem_descriptors,
             'smiles': smiles
         }
 
 # %% GNN Model Definition
 class MolecularGNN(torch.nn.Module):
-    def __init__(self, in_features, hidden_features, latent_dim, out_features):
+    def __init__(self, in_features, hidden_features, latent_dim, physchem_features, out_features):
         super(MolecularGNN, self).__init__()
-        # Encoding layers
+        # Encoding layers for graph structure
         self.fc1 = torch.nn.Linear(in_features, hidden_features)
         self.fc2 = torch.nn.Linear(hidden_features, hidden_features)
         self.fc3 = torch.nn.Linear(hidden_features, latent_dim)
         
-        # Property prediction head
+        # Layers for physicochemical features
+        self.physchem_fc1 = torch.nn.Linear(physchem_features, hidden_features)
+        self.physchem_fc2 = torch.nn.Linear(hidden_features, latent_dim)
+        
+        # Combined property prediction head
+        self.fc_combined = torch.nn.Linear(latent_dim * 2, latent_dim)
         self.fc_out = torch.nn.Linear(latent_dim, out_features)
         
         # Activation functions
         self.relu = torch.nn.ReLU()
         self.dropout = torch.nn.Dropout(0.2)
         
-    def forward(self, x, adj_matrix):
-        # Message passing layers (graph convolution)
+    def forward(self, x, adj_matrix, physchem):
+        # Graph pathway - Message passing layers (graph convolution)
         x = self.fc1(x)
         x = self.relu(torch.mm(adj_matrix, x))
         x = self.dropout(x)
@@ -99,14 +151,25 @@ class MolecularGNN(torch.nn.Module):
         x = self.dropout(x)
         
         # Encoding to latent space
-        latent = self.fc3(x)
+        graph_latent = self.fc3(x)
         
         # Global pooling (mean of node embeddings)
-        graph_embedding = torch.mean(latent, dim=0, keepdim=True)
+        graph_embedding = torch.mean(graph_latent, dim=0, keepdim=True)
+        
+        # Physicochemical pathway
+        physchem_hidden = self.relu(self.physchem_fc1(physchem))
+        physchem_hidden = self.dropout(physchem_hidden)
+        physchem_latent = self.relu(self.physchem_fc2(physchem_hidden))
+        
+        # Combine both pathways
+        combined = torch.cat([graph_embedding, physchem_latent], dim=1)
+        combined = self.relu(self.fc_combined(combined))
+        combined = self.dropout(combined)
         
         # Property prediction
-        out = self.fc_out(graph_embedding)
-        return latent, out
+        out = self.fc_out(combined)
+        
+        return graph_latent, out
 
 # %% Main execution
 def main():
@@ -143,7 +206,7 @@ def main():
     print(f"Unseen prediction set: {len(prediction_df)} molecules")
     
     # Step 3: Process data and train model
-    print("\n3. Training model on ESOL dataset...")
+    print("\n3. Training model on ESOL dataset with physicochemical descriptors...")
     model, train_metrics, test_metrics, best_model_state = train_solubility_model(train_df, output_dir=output_dir)
     
     # Step 4: Evaluate performance
@@ -269,7 +332,12 @@ def train_solubility_model(train_df, epochs=300, batch_size=32, output_dir=None)
             
             mol_graph = converter.smiles_to_graph(smiles)
             if mol_graph:
-                X.append((mol_graph['node_features'], mol_graph['adj_matrix'], mol_graph['mol']))
+                X.append((
+                    mol_graph['node_features'], 
+                    mol_graph['adj_matrix'], 
+                    mol_graph['physchem_features'],
+                    mol_graph['mol']
+                ))
                 y.append(solubility)
         except Exception as e:
             failed_count += 1
@@ -288,7 +356,9 @@ def train_solubility_model(train_df, epochs=300, batch_size=32, output_dir=None)
     
     # Create model
     feature_dim = X_train[0][0].shape[1]
-    model = MolecularGNN(in_features=feature_dim, hidden_features=128, latent_dim=64, out_features=1)
+    physchem_dim = X_train[0][2].shape[1]
+    model = MolecularGNN(in_features=feature_dim, hidden_features=128, latent_dim=64, 
+                         physchem_features=physchem_dim, out_features=1)
     
     # Training setup
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-5)
@@ -316,11 +386,11 @@ def train_solubility_model(train_df, epochs=300, batch_size=32, output_dir=None)
             batch_loss = 0
             
             for idx in batch_indices:
-                features, adj, _ = X_train[idx]
+                features, adj, physchem, _ = X_train[idx]
                 target = y_train[idx]
                 
                 optimizer.zero_grad()
-                _, pred = model(features, adj)
+                _, pred = model(features, adj, physchem)
                 loss = loss_fn(pred, torch.tensor([[target]], dtype=torch.float))
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -340,9 +410,9 @@ def train_solubility_model(train_df, epochs=300, batch_size=32, output_dir=None)
         val_targets = []
         
         with torch.no_grad():
-            for i, (features_adj_mol, target) in enumerate(zip(X_val, y_val)):
-                features, adj, _ = features_adj_mol
-                _, pred = model(features, adj)
+            for i, (features_adj_physchem_mol, target) in enumerate(zip(X_val, y_val)):
+                features, adj, physchem, _ = features_adj_physchem_mol
+                _, pred = model(features, adj, physchem)
                 val_preds.append(pred.item())
                 val_targets.append(target)
                 
@@ -378,9 +448,9 @@ def train_solubility_model(train_df, epochs=300, batch_size=32, output_dir=None)
     train_targets = []
     
     with torch.no_grad():
-        for features_adj_mol, target in zip(X_train, y_train):
-            features, adj, _ = features_adj_mol
-            _, pred = model(features, adj)
+        for features_adj_physchem_mol, target in zip(X_train, y_train):
+            features, adj, physchem, _ = features_adj_physchem_mol
+            _, pred = model(features, adj, physchem)
             train_preds.append(pred.item())
             train_targets.append(target)
     
@@ -395,9 +465,9 @@ def train_solubility_model(train_df, epochs=300, batch_size=32, output_dir=None)
     test_targets = []
     
     with torch.no_grad():
-        for features_adj_mol, target in zip(X_test, y_test):
-            features, adj, _ = features_adj_mol
-            _, pred = model(features, adj)
+        for features_adj_physchem_mol, target in zip(X_test, y_test):
+            features, adj, physchem, _ = features_adj_physchem_mol
+            _, pred = model(features, adj, physchem)
             test_preds.append(pred.item())
             test_targets.append(target)
     
@@ -447,7 +517,8 @@ def predict_unseen_molecules(model, prediction_df):
                 with torch.no_grad():
                     node_features = mol_graph['node_features']
                     adj_matrix = mol_graph['adj_matrix']
-                    _, pred = model(node_features, adj_matrix)
+                    physchem_features = mol_graph['physchem_features']
+                    _, pred = model(node_features, adj_matrix, physchem_features)
                     pred_value = pred.item()
                 
                 predicted_values.append(pred_value)

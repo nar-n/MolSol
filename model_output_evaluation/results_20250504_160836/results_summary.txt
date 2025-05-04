@@ -1,0 +1,29 @@
+GNNSol Molecular Solubility Prediction Results
+Run date: 2025-05-04 16:15:40
+
+Training metrics:
+  RMSE: 0.6173
+  MAE: 0.4241
+  R²: 0.9156
+
+Test metrics:
+  RMSE: 0.5827
+  MAE: 0.4600
+  R²: 0.9143
+
+Unseen prediction set metrics:
+  RMSE: 1.0000
+  MAE: 0.5691
+  R²: 0.8087
+
+Sample predictions:
+Molecule: CC/C=C\C
+  Actual: -2.5400, Predicted: -2.3771, Error: 0.1629
+Molecule: O=C1NC(=O)NC(=O)C1(CC)CC=C(C)C
+  Actual: -2.2530, Predicted: -2.5480, Error: 0.2950
+Molecule: Cc1[nH]c(=O)n(c(=O)c1Cl)C(C)(C)C
+  Actual: -2.4840, Predicted: -2.4768, Error: 0.0072
+Molecule: CC/C=C/C
+  Actual: -2.5400, Predicted: -2.3771, Error: 0.1629
+Molecule: ClC(Cl)C(c1ccc(Cl)cc1)c2ccc(Cl)cc2 
+  Actual: -7.2000, Predicted: -6.9218, Error: 0.2782
