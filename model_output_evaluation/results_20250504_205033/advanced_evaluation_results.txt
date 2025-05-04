@@ -1,0 +1,69 @@
+GNNSol Molecular Solubility Prediction Results
+Run date: 2025-05-04 20:59:45
+
+Model Architecture:
+  Combined Graph Neural Network with physicochemical descriptors
+
+Molecular Graph Features:
+  - Atoms: H, C, N, O, F, P, S, Cl, Br, I (one-hot encoded)
+  - Formal charge
+  - Aromaticity
+  - Atom degree (number of connections)
+  - Number of attached hydrogens
+
+Physicochemical Descriptors:
+  - Molecular Weight
+  - LogP (octanol-water partition coefficient)
+  - Number of H-bond donors
+  - Number of H-bond acceptors
+  - Topological Polar Surface Area (TPSA)
+  - Number of rotatable bonds
+  - Number of rings
+  - Fraction of sp3 carbons
+  - Number of aromatic rings
+  - Number of heteroatoms
+  - Molar refractivity
+  - Labute Accessible Surface Area
+  - QED drug-likeness score
+
+Training metrics:
+  RMSE: 0.7278
+  MAE: 0.5453
+  R²: 0.8826
+
+Test metrics:
+  RMSE: 0.7524
+  MAE: 0.5836
+  R²: 0.8572
+
+K-fold Cross-Validation Results (k=2):
+  Average RMSE: 0.8729
+  Average MAE: 0.6675
+  Average R²: 0.8207
+  Average Q²: 0.8207
+  Average Pearson correlation: 0.9285
+  Average Spearman correlation: 0.9242
+
+Feature Importance (Top 5):
+  1. Atom Degree (Graph-Atom Property): 1.0452
+  2. Number of H (Graph-Atom Property): 0.5984
+  3. Molar Refractivity (Physicochemical): 0.3045
+  4. TPSA (Physicochemical): 0.2785
+  5. Labute ASA (Physicochemical): 0.2434
+
+Unseen prediction set metrics:
+  RMSE: 1.1571
+  MAE: 0.6957
+  R²: 0.7439
+
+Sample predictions:
+Molecule: CC/C=C\C
+  Actual: -2.5400, Predicted: -2.8693, Error: 0.3293
+Molecule: O=C1NC(=O)NC(=O)C1(CC)CC=C(C)C
+  Actual: -2.2530, Predicted: -2.7615, Error: 0.5085
+Molecule: Cc1[nH]c(=O)n(c(=O)c1Cl)C(C)(C)C
+  Actual: -2.4840, Predicted: -2.8510, Error: 0.3670
+Molecule: CC/C=C/C
+  Actual: -2.5400, Predicted: -2.8693, Error: 0.3293
+Molecule: ClC(Cl)C(c1ccc(Cl)cc1)c2ccc(Cl)cc2 
+  Actual: -7.2000, Predicted: -7.5035, Error: 0.3035

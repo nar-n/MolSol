@@ -1,0 +1,30 @@
+Feature,Category,Importance_Score
+Atom Degree,Graph-Atom Property,1.045201444171385
+Number of H,Graph-Atom Property,0.5983860885068811
+Molar Refractivity,Physicochemical,0.3044731013910128
+TPSA,Physicochemical,0.2784816197942793
+Labute ASA,Physicochemical,0.2434033980952477
+Molecular Weight,Physicochemical,0.17700919036826512
+Aromaticity,Graph-Atom Property,0.1597968964639872
+Atom: C,Graph-Atom Type,0.05611353311962208
+H-bond Acceptors,Physicochemical,0.05371885013443123
+Atom: O,Graph-Atom Type,0.050688315840565656
+Rotatable Bonds,Physicochemical,0.03694232539358333
+LogP,Physicochemical,0.03329724282409985
+Formal Charge,Graph-Atom Property,0.029513637807065618
+Aromatic Rings,Physicochemical,0.022250165962206747
+Atom: N,Graph-Atom Type,0.019431554106801308
+Heteroatoms,Physicochemical,0.01193147529751215
+Atom: S,Graph-Atom Type,0.011413457196110421
+Atom: Cl,Graph-Atom Type,0.010480416564884298
+Strong Bonds Only,Graph-Structure,0.010456500016627457
+Atom: P,Graph-Atom Type,0.010345947522442445
+H-bond Donors,Physicochemical,0.0077761153678274075
+Atom: I,Graph-Atom Type,0.0006671071246729943
+Atom: H,Graph-Atom Type,0.0
+Atom: F,Graph-Atom Type,-4.474908459128901e-05
+Rings,Physicochemical,-0.00024010484856973324
+Atom: Br,Graph-Atom Type,-0.0005160368762361367
+QED,Physicochemical,-0.001726863982186022
+Fraction sp3,Physicochemical,-0.003198597176819473
+Bond Connectivity,Graph-Structure,-0.00460354596284418

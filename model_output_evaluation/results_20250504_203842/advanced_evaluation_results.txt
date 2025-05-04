@@ -1,0 +1,47 @@
+GNNSol Molecular Solubility Prediction Results
+Run date: 2025-05-04 20:46:46
+
+Model Architecture:
+  Combined Graph Neural Network with physicochemical descriptors
+
+Molecular Graph Features:
+  - Atoms: H, C, N, O, F, P, S, Cl, Br, I (one-hot encoded)
+  - Formal charge
+  - Aromaticity
+  - Atom degree (number of connections)
+  - Number of attached hydrogens
+
+Physicochemical Descriptors:
+  - Molecular Weight
+  - LogP (octanol-water partition coefficient)
+  - Number of H-bond donors
+  - Number of H-bond acceptors
+  - Topological Polar Surface Area (TPSA)
+  - Number of rotatable bonds
+  - Number of rings
+  - Fraction of sp3 carbons
+  - Number of aromatic rings
+  - Number of heteroatoms
+  - Molar refractivity
+  - Labute Accessible Surface Area
+  - QED drug-likeness score
+
+Training metrics:
+  RMSE: 0.7238
+  MAE: 0.5133
+  R²: 0.8839
+
+Test metrics:
+  RMSE: 0.6911
+  MAE: 0.5427
+  R²: 0.8795
+
+K-fold Cross-Validation Results (k=2):
+  Average RMSE: 0.8485
+  Average MAE: 0.6583
+  Average R²: 0.8324
+  Average Q²: 0.8324
+  Average Pearson correlation: 0.9216
+  Average Spearman correlation: 0.9129
+
+Feature Importance (Top 5):

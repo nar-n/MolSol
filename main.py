@@ -379,6 +379,222 @@ class MolecularGNN(torch.nn.Module):
         
         return graph_latent, out
 
+# %% Feature Importance CSV Generation
+def generate_feature_importance_csv(model, X_test, y_test, output_dir=None):
+    """
+    Generate a comprehensive CSV file showing the importance of all features
+    including both graph-based (atom types, properties) and physicochemical descriptors.
+    
+    Args:
+        model: Trained GNN model
+        X_test: List of test data tuples (node_features, adj_matrix, physchem_features, mol)
+        y_test: List of test labels
+        output_dir: Directory to save the CSV and visualization
+        
+    Returns:
+        DataFrame containing feature importance scores
+    """
+    print("\nGenerating comprehensive feature importance analysis...")
+    feature_data = []
+    
+    # Get baseline prediction with full model
+    model.eval()
+    baseline_preds = []
+    
+    with torch.no_grad():
+        for features_adj_physchem_mol, _ in zip(X_test, y_test):
+            features, adj, physchem, _ = features_adj_physchem_mol
+            _, pred = model(features, adj, physchem)
+            baseline_preds.append(pred.item())
+    
+    baseline_rmse = np.sqrt(mean_squared_error(y_test, baseline_preds))
+    print(f"Baseline RMSE: {baseline_rmse:.4f}")
+    
+    # 1. Analyze Atom Types (first 10 features in node_features are one-hot encoded atom types)
+    print("Analyzing atom type features...")
+    atom_types = ['H', 'C', 'N', 'O', 'F', 'P', 'S', 'Cl', 'Br', 'I']
+    
+    for atom_idx, atom_type in enumerate(atom_types):
+        atom_type_preds = []
+        
+        with torch.no_grad():
+            for idx, (features_adj_physchem_mol, _) in enumerate(zip(X_test, y_test)):
+                features, adj, physchem, _ = features_adj_physchem_mol
+                
+                # Create modified copy of features with atom type zeroed out
+                modified_features = features.clone()
+                modified_features[:, atom_idx] = 0.0
+                
+                _, pred = model(modified_features, adj, physchem)
+                atom_type_preds.append(pred.item())
+        
+        # Calculate impact when this atom type is removed
+        atom_rmse = np.sqrt(mean_squared_error(y_test, atom_type_preds))
+        importance_score = atom_rmse - baseline_rmse
+        
+        # Add to feature data
+        feature_data.append({
+            'Feature': f'Atom: {atom_type}',
+            'Category': 'Graph-Atom Type',
+            'Importance_Score': importance_score
+        })
+    
+    # 2. Analyze Atom Properties (formal charge, aromaticity, degree, num H)
+    print("Analyzing atom property features...")
+    atom_properties = ['Formal Charge', 'Aromaticity', 'Atom Degree', 'Number of H']
+    
+    for prop_idx, prop_name in enumerate(atom_properties):
+        prop_preds = []
+        
+        with torch.no_grad():
+            for idx, (features_adj_physchem_mol, _) in enumerate(zip(X_test, y_test)):
+                features, adj, physchem, _ = features_adj_physchem_mol
+                
+                # Create modified copy with property zeroed out (starting at index 10)
+                modified_features = features.clone()
+                modified_features[:, 10 + prop_idx] = 0.0
+                
+                _, pred = model(modified_features, adj, physchem)
+                prop_preds.append(pred.item())
+        
+        # Calculate impact when this property is removed
+        prop_rmse = np.sqrt(mean_squared_error(y_test, prop_preds))
+        importance_score = prop_rmse - baseline_rmse
+        
+        # Add to feature data
+        feature_data.append({
+            'Feature': prop_name,
+            'Category': 'Graph-Atom Property',
+            'Importance_Score': importance_score
+        })
+    
+    # 3. Analyze Graph Structure (bond connectivity)
+    print("Analyzing graph structural features...")
+    
+    # Effect of edge weights (reducing by 50%)
+    edge_preds = []
+    with torch.no_grad():
+        for idx, (features_adj_physchem_mol, _) in enumerate(zip(X_test, y_test)):
+            features, adj, physchem, _ = features_adj_physchem_mol
+            
+            # Reduce edge weights by 50%
+            modified_adj = adj.clone() * 0.5
+            
+            _, pred = model(features, modified_adj, physchem)
+            edge_preds.append(pred.item())
+    
+    edge_rmse = np.sqrt(mean_squared_error(y_test, edge_preds))
+    importance_score = edge_rmse - baseline_rmse
+    
+    feature_data.append({
+        'Feature': 'Bond Connectivity',
+        'Category': 'Graph-Structure',
+        'Importance_Score': importance_score
+    })
+    
+    # Effect of removing edges (sparsify graph by keeping only strong bonds)
+    sparse_preds = []
+    with torch.no_grad():
+        for idx, (features_adj_physchem_mol, _) in enumerate(zip(X_test, y_test)):
+            features, adj, physchem, _ = features_adj_physchem_mol
+            
+            # Only keep bonds with weight > 1.0 (typically double and triple bonds)
+            modified_adj = adj.clone()
+            modified_adj[modified_adj <= 1.0] = 0.0
+            
+            _, pred = model(features, modified_adj, physchem)
+            sparse_preds.append(pred.item())
+    
+    sparse_rmse = np.sqrt(mean_squared_error(y_test, sparse_preds))
+    importance_score = sparse_rmse - baseline_rmse
+    
+    feature_data.append({
+        'Feature': 'Strong Bonds Only',
+        'Category': 'Graph-Structure',
+        'Importance_Score': importance_score
+    })
+    
+    # 4. Analyze Physicochemical Descriptors
+    print("Analyzing physicochemical descriptors...")
+    physchem_feature_names = [
+        "Molecular Weight", "LogP", "H-bond Donors", "H-bond Acceptors", 
+        "TPSA", "Rotatable Bonds", "Rings", "Fraction sp3", 
+        "Aromatic Rings", "Heteroatoms", "Molar Refractivity", 
+        "Labute ASA", "QED"
+    ]
+    
+    for feature_idx, feature_name in enumerate(physchem_feature_names):
+        feature_preds = []
+        
+        # Fix: Use X_test consistently throughout the function
+        feature_values = [X_test[i][2][0, feature_idx].item() for i in range(len(X_test))]
+        feature_mean = np.mean(feature_values)
+        
+        with torch.no_grad():
+            for idx, (features_adj_physchem_mol, _) in enumerate(zip(X_test, y_test)):
+                features, adj, physchem, _ = features_adj_physchem_mol
+                
+                # Create modified copy with descriptor set to mean
+                modified_physchem = physchem.clone()
+                modified_physchem[0, feature_idx] = feature_mean
+                
+                _, pred = model(features, adj, modified_physchem)
+                feature_preds.append(pred.item())
+        
+        feature_rmse = np.sqrt(mean_squared_error(y_test, feature_preds))
+        importance_score = feature_rmse - baseline_rmse
+        
+        feature_data.append({
+            'Feature': feature_name,
+            'Category': 'Physicochemical',
+            'Importance_Score': importance_score
+        })
+    
+    # Create DataFrame and sort by importance
+    df = pd.DataFrame(feature_data)
+    df = df.sort_values('Importance_Score', ascending=False).reset_index(drop=True)
+    
+    # Save to CSV
+    if output_dir is None:
+        output_dir = os.getcwd()
+        
+    csv_path = os.path.join(output_dir, 'feature_importance_complete.csv')
+    df.to_csv(csv_path, index=False)
+    print(f"Feature importance analysis saved to: {csv_path}")
+    
+    # Create visualization
+    plt.figure(figsize=(12, 10))
+    # Create colors by category
+    colors = {
+        'Graph-Atom Type': 'blue',
+        'Graph-Atom Property': 'skyblue',
+        'Graph-Structure': 'green', 
+        'Physicochemical': 'orange'
+    }
+    
+    # Plot top 20 features or all if less than 20
+    top_n = min(20, len(df))
+    top_df = df.head(top_n)
+    
+    bar_colors = [colors[category] for category in top_df['Category']]
+    
+    plt.barh(top_df['Feature'], top_df['Importance_Score'], color=bar_colors)
+    
+    # Add category legend
+    from matplotlib.patches import Patch
+    legend_elements = [Patch(facecolor=color, label=cat) for cat, color in colors.items()]
+    plt.legend(handles=legend_elements, loc='lower right')
+    
+    plt.xlabel('Increase in RMSE when feature is removed/modified')
+    plt.title('Top Feature Importance Analysis')
+    plt.tight_layout()
+    
+    plot_path = os.path.join(output_dir, 'feature_importance_complete.png')
+    plt.savefig(plot_path)
+    plt.close()
+    
+    return df
+
 # %% Main execution
 def main():
     start_time = time.time()
@@ -467,11 +683,12 @@ def main():
     print(f"Average Spearman correlation: {cv_results['avg_metrics']['spearman_rho']:.4f}")
     
     # Feature importance analysis
-    feature_importance = ModelEvaluator.analyze_feature_importance(model, X_test, y_test, output_dir=output_dir)
+    print("\nGenerating comprehensive feature importance analysis...")
+    feature_imp_df = generate_feature_importance_csv(model, X_test, y_test, output_dir=output_dir)
     
     print("\nTop 5 most important features:")
-    for i, (feature, importance) in enumerate(feature_importance[:5]):
-        print(f"  {i+1}. {feature}: {importance:.4f}")
+    for idx, row in feature_imp_df.head(5).iterrows():
+        print(f"  {idx+1}. {row['Feature']} ({row['Category']}): {row['Importance_Score']:.4f}")
     
     # Step 6: Predict solubility for unseen molecules
     print("\n6. Predicting solubility for unseen molecules")
@@ -547,8 +764,8 @@ def main():
         f.write(f"  Average Spearman correlation: {cv_results['avg_metrics']['spearman_rho']:.4f}\n\n")
         
         f.write(f"Feature Importance (Top 5):\n")
-        for i, (feature, importance) in enumerate(feature_importance[:5]):
-            f.write(f"  {i+1}. {feature}: {importance:.4f}\n")
+        for i, row in enumerate(feature_imp_df.head(5).itertuples(index=False)):
+            f.write(f"  {i+1}. {row.Feature} ({row.Category}): {row.Importance_Score:.4f}\n")
         f.write("\n")
         
         f.write(f"Unseen prediction set metrics:\n")

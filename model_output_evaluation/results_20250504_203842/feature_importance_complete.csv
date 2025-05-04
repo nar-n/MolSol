@@ -1,0 +1,30 @@
+Feature,Category,Importance_Score
+Atom Degree,Graph-Atom Property,1.6281428493424168
+TPSA,Physicochemical,0.5307797771894226
+Molecular Weight,Physicochemical,0.34271223152577146
+Atom: C,Graph-Atom Type,0.3255932812411706
+Molar Refractivity,Physicochemical,0.3225010001511385
+Bond Connectivity,Graph-Structure,0.3161216508169966
+LogP,Physicochemical,0.20338417325918423
+Strong Bonds Only,Graph-Structure,0.18604551727284813
+H-bond Acceptors,Physicochemical,0.13065241501126867
+Number of H,Graph-Atom Property,0.11881126480187254
+Heteroatoms,Physicochemical,0.09323696439382245
+Labute ASA,Physicochemical,0.0820176275079827
+Atom: N,Graph-Atom Type,0.0442114734765221
+Rotatable Bonds,Physicochemical,0.043390728925356226
+Formal Charge,Graph-Atom Property,0.03460373152007923
+Atom: S,Graph-Atom Type,0.030404060807483146
+Atom: O,Graph-Atom Type,0.03007202810220244
+Aromaticity,Graph-Atom Property,0.011371556873185584
+Rings,Physicochemical,0.004889830887953139
+Atom: Cl,Graph-Atom Type,0.003480740177041808
+Fraction sp3,Physicochemical,0.0034010894809798353
+Atom: I,Graph-Atom Type,0.0009891052663377753
+Atom: H,Graph-Atom Type,0.0
+Atom: F,Graph-Atom Type,-0.0005833327650701658
+QED,Physicochemical,-0.001788897361569286
+H-bond Donors,Physicochemical,-0.0025797034454438927
+Aromatic Rings,Physicochemical,-0.0035731696941849744
+Atom: P,Graph-Atom Type,-0.003877256511769067
+Atom: Br,Graph-Atom Type,-0.00438103972584114
