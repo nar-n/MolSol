@@ -261,6 +261,33 @@ def main():
     with open(os.path.join(output_dir, 'results_summary.txt'), 'w') as f:
         f.write(f"GNNSol Molecular Solubility Prediction Results\n")
         f.write(f"Run date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        
+        # Add model architecture and feature information
+        f.write(f"Model Architecture:\n")
+        f.write(f"  Combined Graph Neural Network with physicochemical descriptors\n\n")
+        
+        f.write(f"Molecular Graph Features:\n")
+        f.write(f"  - Atoms: H, C, N, O, F, P, S, Cl, Br, I (one-hot encoded)\n")
+        f.write(f"  - Formal charge\n")
+        f.write(f"  - Aromaticity\n")
+        f.write(f"  - Atom degree (number of connections)\n")
+        f.write(f"  - Number of attached hydrogens\n\n")
+        
+        f.write(f"Physicochemical Descriptors:\n")
+        f.write(f"  - Molecular Weight\n")
+        f.write(f"  - LogP (octanol-water partition coefficient)\n")
+        f.write(f"  - Number of H-bond donors\n")
+        f.write(f"  - Number of H-bond acceptors\n")
+        f.write(f"  - Topological Polar Surface Area (TPSA)\n")
+        f.write(f"  - Number of rotatable bonds\n")
+        f.write(f"  - Number of rings\n")
+        f.write(f"  - Fraction of sp3 carbons\n")
+        f.write(f"  - Number of aromatic rings\n")
+        f.write(f"  - Number of heteroatoms\n")
+        f.write(f"  - Molar refractivity\n")
+        f.write(f"  - Labute Accessible Surface Area\n")
+        f.write(f"  - QED drug-likeness score\n\n")
+        
         f.write(f"Training metrics:\n")
         f.write(f"  RMSE: {train_metrics['rmse']:.4f}\n")
         f.write(f"  MAE: {train_metrics['mae']:.4f}\n")
