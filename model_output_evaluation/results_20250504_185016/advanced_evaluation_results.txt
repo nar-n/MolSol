@@ -1,0 +1,18 @@
+GNNSol Molecular Solubility Prediction - Advanced Evaluation Results
+Run date: 2025-05-04 19:43:34
+
+K-fold Cross-Validation Results (k=5):
+  Average RMSE: 0.7457
+  Average MAE: 0.5669
+  Average R²: 0.8689
+  Average Q²: 0.8689
+  Average Pearson correlation: 0.9429
+  Average Spearman correlation: 0.9394
+
+Feature Importance (Top 5):
+  1. TPSA: 0.5178
+  2. Molar Refractivity: 0.3577
+  3. Molecular Weight: 0.2151
+  4. H-bond Acceptors: 0.1251
+  5. LogP: 0.1112
+

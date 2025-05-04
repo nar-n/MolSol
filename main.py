@@ -8,6 +8,7 @@ This script focuses only on:
 5. Keeping the best model
 6. Predicting solubility of unseen molecules
 7. Reporting results
+8. Advanced model evaluation techniques
 """
 
 import torch
@@ -20,12 +21,15 @@ try:
     from rdkit.Chem import QED  # In newer versions of RDKit, QED is a separate module
 except ImportError:
     QED = None
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, KFold
 import pandas as pd
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+from scipy.stats import pearsonr, spearmanr
 import time
 import datetime
 import os
+import copy
+from collections import defaultdict
 
 # %% Molecular Graph Construction
 class MoleculeGraphConverter:
@@ -118,6 +122,210 @@ class MoleculeGraphConverter:
             'physchem_features': physchem_descriptors,
             'smiles': smiles
         }
+
+# %% Advanced Evaluation Techniques
+
+class ModelEvaluator:
+    """Class for advanced model evaluation techniques"""
+    
+    @staticmethod
+    def calculate_extended_metrics(y_true, y_pred):
+        """Calculate extended set of evaluation metrics including Pearson, Spearman, Q², and MAPE"""
+        metrics = {}
+        
+        # Convert lists to numpy arrays if they're not already
+        y_true = np.array(y_true) if not isinstance(y_true, np.ndarray) else y_true
+        y_pred = np.array(y_pred) if not isinstance(y_pred, np.ndarray) else y_pred
+        
+        # Standard metrics
+        metrics['rmse'] = np.sqrt(mean_squared_error(y_true, y_pred))
+        metrics['mae'] = mean_absolute_error(y_true, y_pred)
+        metrics['r2'] = r2_score(y_true, y_pred)
+        
+        # Additional statistical metrics
+        # Pearson correlation
+        pearson_corr, p_value = pearsonr(y_true, y_pred)
+        metrics['pearson_r'] = pearson_corr
+        metrics['pearson_p'] = p_value
+        
+        # Spearman correlation
+        spearman_corr, s_p_value = spearmanr(y_true, y_pred)
+        metrics['spearman_rho'] = spearman_corr
+        metrics['spearman_p'] = s_p_value
+        
+        # Q² (predictive R²) - implemented as a variant of R² based on predicted values
+        # This is an approximation of Q² for demonstration purposes
+        y_mean = np.mean(y_true)
+        ss_total = np.sum((y_true - y_mean) ** 2)
+        press = np.sum((y_true - y_pred) ** 2)  # PRESS: prediction error sum of squares
+        metrics['q2'] = 1 - (press / ss_total)
+        
+        # MAPE (Mean Absolute Percentage Error)
+        # Handle potential division by zero or very small values
+        abs_percentage_errors = []
+        for true, pred in zip(y_true, y_pred):
+            if abs(true) > 0.001:  # Avoid division by very small numbers
+                abs_percentage_errors.append(abs((true - pred) / true) * 100)
+        
+        if abs_percentage_errors:
+            metrics['mape'] = np.mean(abs_percentage_errors)
+        else:
+            metrics['mape'] = float('nan')
+            
+        return metrics
+    
+    @staticmethod
+    def perform_kfold_cv(X, y, k=10, epochs=100, batch_size=32):
+        """Perform k-fold cross-validation"""
+        kf = KFold(n_splits=k, shuffle=True, random_state=42)
+        
+        fold_metrics = []
+        all_predictions = []
+        all_targets = []
+        
+        print(f"\nPerforming {k}-fold cross-validation...")
+        
+        for fold, (train_idx, val_idx) in enumerate(kf.split(range(len(X)))):
+            print(f"Fold {fold+1}/{k}...")
+            
+            # Split data
+            X_train_fold = [X[i] for i in train_idx]
+            y_train_fold = [y[i] for i in train_idx]
+            X_val_fold = [X[i] for i in val_idx]
+            y_val_fold = [y[i] for i in val_idx]
+            
+            # Create model
+            feature_dim = X_train_fold[0][0].shape[1]  # Node features dimension
+            physchem_dim = X_train_fold[0][2].shape[1]  # Physicochemical features dimension
+            model = MolecularGNN(in_features=feature_dim, hidden_features=128, latent_dim=64, 
+                             physchem_features=physchem_dim, out_features=1)
+            
+            # Train model
+            optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-5)
+            loss_fn = torch.nn.MSELoss()
+            
+            # Simple training loop for CV
+            for epoch in range(epochs):
+                # Training
+                model.train()
+                for i in range(0, len(X_train_fold), batch_size):
+                    batch_indices = range(i, min(i+batch_size, len(X_train_fold)))
+                    
+                    for idx in batch_indices:
+                        features, adj, physchem, _ = X_train_fold[idx]
+                        target = y_train_fold[idx]
+                        
+                        optimizer.zero_grad()
+                        _, pred = model(features, adj, physchem)
+                        loss = loss_fn(pred, torch.tensor([[target]], dtype=torch.float))
+                        loss.backward()
+                        optimizer.step()
+                
+                # Print progress at specific intervals
+                if (epoch + 1) % 20 == 0:
+                    print(f"  Epoch {epoch+1}/{epochs}")
+            
+            # Evaluate on validation set
+            model.eval()
+            fold_preds = []
+            
+            with torch.no_grad():
+                for features_adj_physchem_mol, target in zip(X_val_fold, y_val_fold):
+                    features, adj, physchem, _ = features_adj_physchem_mol
+                    _, pred = model(features, adj, physchem)
+                    fold_preds.append(pred.item())
+                    
+                    all_predictions.append(pred.item())
+                    all_targets.append(target)
+            
+            # Calculate metrics for this fold
+            fold_metric = ModelEvaluator.calculate_extended_metrics(y_val_fold, fold_preds)
+            fold_metrics.append(fold_metric)
+            
+            print(f"  Fold {fold+1} metrics: RMSE={fold_metric['rmse']:.4f}, R²={fold_metric['r2']:.4f}")
+        
+        # Calculate average metrics across all folds
+        avg_metrics = defaultdict(float)
+        for metric in fold_metrics[0].keys():
+            avg_metrics[metric] = sum(fold[metric] for fold in fold_metrics) / k
+        
+        # Calculate aggregated metrics on all predictions
+        overall_metrics = ModelEvaluator.calculate_extended_metrics(all_targets, all_predictions)
+        
+        return {
+            'fold_metrics': fold_metrics,
+            'avg_metrics': dict(avg_metrics),
+            'overall_metrics': overall_metrics
+        }
+    
+    @staticmethod
+    def analyze_feature_importance(model, X, y, output_dir=None):
+        """Analyze feature importance by removing each feature and measuring performance impact"""
+        print("\nAnalyzing feature importance...")
+        
+        # Baseline prediction with full model
+        model.eval()
+        baseline_preds = []
+        
+        with torch.no_grad():
+            for features_adj_physchem_mol, _ in zip(X, y):
+                features, adj, physchem, _ = features_adj_physchem_mol
+                _, pred = model(features, adj, physchem)
+                baseline_preds.append(pred.item())
+        
+        baseline_rmse = np.sqrt(mean_squared_error(y, baseline_preds))
+        
+        # Feature names for physicochemical features
+        physchem_feature_names = [
+            "Molecular Weight", "LogP", "H-bond Donors", "H-bond Acceptors", 
+            "TPSA", "Rotatable Bonds", "Rings", "Fraction sp3", 
+            "Aromatic Rings", "Heteroatoms", "Molar Refractivity", 
+            "Labute ASA", "QED"
+        ]
+        
+        # Analyze importance of physicochemical features
+        importance_scores = []
+        
+        for feature_idx in range(X[0][2].shape[1]):
+            # Skip specific features for this run by setting to mean
+            feature_preds = []
+            feature_values = [X[i][2][0, feature_idx].item() for i in range(len(X))]
+            feature_mean = np.mean(feature_values)
+            
+            with torch.no_grad():
+                for idx, (features_adj_physchem_mol, _) in enumerate(zip(X, y)):
+                    features, adj, physchem, _ = features_adj_physchem_mol
+                    
+                    # Create modified copy of physchem with one feature zeroed out
+                    modified_physchem = physchem.clone()
+                    modified_physchem[0, feature_idx] = feature_mean
+                    
+                    _, pred = model(features, adj, modified_physchem)
+                    feature_preds.append(pred.item())
+            
+            # Calculate performance impact when this feature is removed
+            feature_rmse = np.sqrt(mean_squared_error(y, feature_preds))
+            importance_score = feature_rmse - baseline_rmse
+            importance_scores.append(importance_score)
+        
+        # Create feature importance visualization
+        plt.figure(figsize=(12, 8))
+        sorted_indices = np.argsort(importance_scores)
+        plt.barh([physchem_feature_names[i] for i in sorted_indices], 
+                 [importance_scores[i] for i in sorted_indices])
+        plt.xlabel('Increase in RMSE when feature is removed')
+        plt.title('Physicochemical Feature Importance')
+        plt.tight_layout()
+        
+        if output_dir:
+            plt.savefig(os.path.join(output_dir, 'feature_importance.png'))
+        else:
+            plt.savefig('feature_importance.png')
+        plt.close()
+        
+        # Return sorted feature importance
+        return [(physchem_feature_names[i], importance_scores[i]) 
+                for i in sorted_indices[::-1]]  # Reverse to get highest importance first
 
 # %% GNN Model Definition
 class MolecularGNN(torch.nn.Module):
@@ -220,6 +428,51 @@ def main():
         model.load_state_dict(best_model_state)
         print("Best model loaded successfully")
     
+    # Advanced model evaluation
+    print("\n=== Advanced Model Evaluation ===")
+    
+    # Process molecules for evaluation
+    converter = MoleculeGraphConverter()
+    X_all = []
+    y_all = []
+    
+    print("Processing molecules for evaluation...")
+    for _, row in train_df.iterrows():
+        try:
+            smiles = row['smiles']
+            solubility = row['solubility']
+            
+            mol_graph = converter.smiles_to_graph(smiles)
+            if mol_graph:
+                X_all.append((
+                    mol_graph['node_features'], 
+                    mol_graph['adj_matrix'], 
+                    mol_graph['physchem_features'],
+                    mol_graph['mol']
+                ))
+                y_all.append(solubility)
+        except Exception as e:
+            pass
+    
+    # Split for evaluation
+    X_train, X_test, y_train, y_test = train_test_split(X_all, y_all, test_size=0.2, random_state=42)
+    
+    # K-fold cross-validation - changed to 2-fold with 20 epochs each
+    cv_results = ModelEvaluator.perform_kfold_cv(X_all, y_all, k=2, epochs=20)
+    
+    print("\nK-fold Cross-Validation Results:")
+    print(f"Average RMSE: {cv_results['avg_metrics']['rmse']:.4f}")
+    print(f"Average R²: {cv_results['avg_metrics']['r2']:.4f}")
+    print(f"Average Pearson correlation: {cv_results['avg_metrics']['pearson_r']:.4f}")
+    print(f"Average Spearman correlation: {cv_results['avg_metrics']['spearman_rho']:.4f}")
+    
+    # Feature importance analysis
+    feature_importance = ModelEvaluator.analyze_feature_importance(model, X_test, y_test, output_dir=output_dir)
+    
+    print("\nTop 5 most important features:")
+    for i, (feature, importance) in enumerate(feature_importance[:5]):
+        print(f"  {i+1}. {feature}: {importance:.4f}")
+    
     # Step 6: Predict solubility for unseen molecules
     print("\n6. Predicting solubility for unseen molecules")
     prediction_results = predict_unseen_molecules(model, prediction_df)
@@ -231,7 +484,7 @@ def main():
     print(f"  MAE: {prediction_results['mae']:.4f}")
     print(f"  R²: {prediction_results['r2']:.4f}")
     
-    # Save prediction scatter plot
+    # Save unseen predictions scatter plot
     plt.figure(figsize=(10, 6))
     plt.scatter(prediction_results['actual'], prediction_results['predicted'], alpha=0.6)
     plt.plot([min(prediction_results['actual']), max(prediction_results['actual'])], 
@@ -242,23 +495,10 @@ def main():
     plt.grid(True)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'unseen_predictions.png'))
-    plt.close()  # Close the figure instead of showing it
+    plt.close()
     
-    # Save residuals plot
-    plt.figure(figsize=(10, 6))
-    residuals = np.array(prediction_results['predicted']) - np.array(prediction_results['actual'])
-    plt.scatter(prediction_results['predicted'], residuals, alpha=0.6)
-    plt.axhline(y=0, color='r', linestyle='-')
-    plt.xlabel('Predicted LogS')
-    plt.ylabel('Residuals')
-    plt.title('Residuals Plot')
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'residuals.png'))
-    plt.close()  # Close the figure instead of showing it
-    
-    # Save a summary of results to a text file
-    with open(os.path.join(output_dir, 'results_summary.txt'), 'w') as f:
+    # Save all evaluation results to the summary file with comprehensive model description
+    with open(os.path.join(output_dir, 'advanced_evaluation_results.txt'), 'w') as f:
         f.write(f"GNNSol Molecular Solubility Prediction Results\n")
         f.write(f"Run date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         
@@ -292,14 +532,30 @@ def main():
         f.write(f"  RMSE: {train_metrics['rmse']:.4f}\n")
         f.write(f"  MAE: {train_metrics['mae']:.4f}\n")
         f.write(f"  R²: {train_metrics['r2']:.4f}\n\n")
+        
         f.write(f"Test metrics:\n")
         f.write(f"  RMSE: {test_metrics['rmse']:.4f}\n")
         f.write(f"  MAE: {test_metrics['mae']:.4f}\n")
         f.write(f"  R²: {test_metrics['r2']:.4f}\n\n")
+        
+        f.write(f"K-fold Cross-Validation Results (k=2):\n")
+        f.write(f"  Average RMSE: {cv_results['avg_metrics']['rmse']:.4f}\n")
+        f.write(f"  Average MAE: {cv_results['avg_metrics']['mae']:.4f}\n")
+        f.write(f"  Average R²: {cv_results['avg_metrics']['r2']:.4f}\n")
+        f.write(f"  Average Q²: {cv_results['avg_metrics']['q2']:.4f}\n")
+        f.write(f"  Average Pearson correlation: {cv_results['avg_metrics']['pearson_r']:.4f}\n")
+        f.write(f"  Average Spearman correlation: {cv_results['avg_metrics']['spearman_rho']:.4f}\n\n")
+        
+        f.write(f"Feature Importance (Top 5):\n")
+        for i, (feature, importance) in enumerate(feature_importance[:5]):
+            f.write(f"  {i+1}. {feature}: {importance:.4f}\n")
+        f.write("\n")
+        
         f.write(f"Unseen prediction set metrics:\n")
         f.write(f"  RMSE: {prediction_results['rmse']:.4f}\n")
         f.write(f"  MAE: {prediction_results['mae']:.4f}\n")
         f.write(f"  R²: {prediction_results['r2']:.4f}\n\n")
+        
         f.write(f"Sample predictions:\n")
         for i in range(min(5, len(prediction_results['smiles']))):
             f.write(f"Molecule: {prediction_results['smiles'][i]}\n")
