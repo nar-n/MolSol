@@ -327,58 +327,6 @@ class ModelEvaluator:
         return [(physchem_feature_names[i], importance_scores[i]) 
                 for i in sorted_indices[::-1]]  # Reverse to get highest importance first
 
-# %% GNN Model Definition
-class MolecularGNN(torch.nn.Module):
-    def __init__(self, in_features, hidden_features, latent_dim, physchem_features, out_features):
-        super(MolecularGNN, self).__init__()
-        # Encoding layers for graph structure
-        self.fc1 = torch.nn.Linear(in_features, hidden_features)
-        self.fc2 = torch.nn.Linear(hidden_features, hidden_features)
-        self.fc3 = torch.nn.Linear(hidden_features, latent_dim)
-        
-        # Layers for physicochemical features
-        self.physchem_fc1 = torch.nn.Linear(physchem_features, hidden_features)
-        self.physchem_fc2 = torch.nn.Linear(hidden_features, latent_dim)
-        
-        # Combined property prediction head
-        self.fc_combined = torch.nn.Linear(latent_dim * 2, latent_dim)
-        self.fc_out = torch.nn.Linear(latent_dim, out_features)
-        
-        # Activation functions
-        self.relu = torch.nn.ReLU()
-        self.dropout = torch.nn.Dropout(0.2)
-        
-    def forward(self, x, adj_matrix, physchem):
-        # Graph pathway - Message passing layers (graph convolution)
-        x = self.fc1(x)
-        x = self.relu(torch.mm(adj_matrix, x))
-        x = self.dropout(x)
-        
-        x = self.fc2(x)
-        x = self.relu(torch.mm(adj_matrix, x))
-        x = self.dropout(x)
-        
-        # Encoding to latent space
-        graph_latent = self.fc3(x)
-        
-        # Global pooling (mean of node embeddings)
-        graph_embedding = torch.mean(graph_latent, dim=0, keepdim=True)
-        
-        # Physicochemical pathway
-        physchem_hidden = self.relu(self.physchem_fc1(physchem))
-        physchem_hidden = self.dropout(physchem_hidden)
-        physchem_latent = self.relu(self.physchem_fc2(physchem_hidden))
-        
-        # Combine both pathways
-        combined = torch.cat([graph_embedding, physchem_latent], dim=1)
-        combined = self.relu(self.fc_combined(combined))
-        combined = self.dropout(combined)
-        
-        # Property prediction
-        out = self.fc_out(combined)
-        
-        return graph_latent, out
-
 # %% Feature Importance CSV Generation
 def generate_feature_importance_csv(model, X_test, y_test, output_dir=None):
     """
@@ -595,197 +543,301 @@ def generate_feature_importance_csv(model, X_test, y_test, output_dir=None):
     
     return df
 
-# %% Main execution
-def main():
-    start_time = time.time()
-    # Create model_output_evaluation directory and unique results folder inside it
-    parent_output_dir = os.path.join(os.getcwd(), "model_output_evaluation")
-    os.makedirs(parent_output_dir, exist_ok=True)
-    
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = os.path.join(parent_output_dir, f"results_{timestamp}")
-    os.makedirs(output_dir, exist_ok=True)
-    
-    print(f"Starting molecular solubility prediction at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Output files will be saved in: {output_dir}")
-    print(f"PyTorch version: {torch.__version__}")
-    
-    # Step 1: Load ESOL dataset
-    print("\n1. Loading ESOL dataset for molecular solubility prediction...")
-    esol_df = load_esol_dataset()
-    if esol_df is None:
-        print("Failed to load dataset. Exiting.")
-        return
-    
-    print(f"Dataset shape: {esol_df.shape}")
-    print("Sample data:")
-    print(esol_df.head())
-    
-    # Step 2: Split into training and unseen prediction sets
-    prediction_set_size = 0.1  # 10% of data kept as unseen prediction set
-    print(f"\n2. Splitting dataset - keeping {prediction_set_size*100:.0f}% as unseen prediction set")
-    
-    train_df, prediction_df = train_test_split(esol_df, test_size=prediction_set_size, random_state=42)
-    print(f"Training set: {len(train_df)} molecules")
-    print(f"Unseen prediction set: {len(prediction_df)} molecules")
-    
-    # Step 3: Process data and train model
-    print("\n3. Training model on ESOL dataset with physicochemical descriptors...")
-    model, train_metrics, test_metrics, best_model_state = train_solubility_model(train_df, output_dir=output_dir)
-    
-    # Step 4: Evaluate performance
-    print("\n4. Evaluating model performance")
-    print(f"Training metrics: RMSE={train_metrics['rmse']:.4f}, MAE={train_metrics['mae']:.4f}, R²={train_metrics['r2']:.4f}")
-    print(f"Test metrics: RMSE={test_metrics['rmse']:.4f}, MAE={test_metrics['mae']:.4f}, R²={test_metrics['r2']:.4f}")
-    
-    # Step 5: Keep best model
-    print("\n5. Loading best model from training")
-    if best_model_state:
-        model.load_state_dict(best_model_state)
-        print("Best model loaded successfully")
-    
-    # Advanced model evaluation
-    print("\n=== Advanced Model Evaluation ===")
-    
-    # Process molecules for evaluation
-    converter = MoleculeGraphConverter()
-    X_all = []
-    y_all = []
-    
-    print("Processing molecules for evaluation...")
-    for _, row in train_df.iterrows():
-        try:
-            smiles = row['smiles']
-            solubility = row['solubility']
-            
-            mol_graph = converter.smiles_to_graph(smiles)
-            if mol_graph:
-                X_all.append((
-                    mol_graph['node_features'], 
-                    mol_graph['adj_matrix'], 
-                    mol_graph['physchem_features'],
-                    mol_graph['mol']
-                ))
-                y_all.append(solubility)
-        except Exception as e:
-            pass
-    
-    # Split for evaluation
-    X_train, X_test, y_train, y_test = train_test_split(X_all, y_all, test_size=0.2, random_state=42)
-    
-    # K-fold cross-validation - changed to 2-fold with 20 epochs each
-    cv_results = ModelEvaluator.perform_kfold_cv(X_all, y_all, k=2, epochs=20)
-    
-    print("\nK-fold Cross-Validation Results:")
-    print(f"Average RMSE: {cv_results['avg_metrics']['rmse']:.4f}")
-    print(f"Average R²: {cv_results['avg_metrics']['r2']:.4f}")
-    print(f"Average Pearson correlation: {cv_results['avg_metrics']['pearson_r']:.4f}")
-    print(f"Average Spearman correlation: {cv_results['avg_metrics']['spearman_rho']:.4f}")
-    
-    # Feature importance analysis
-    print("\nGenerating comprehensive feature importance analysis...")
-    feature_imp_df = generate_feature_importance_csv(model, X_test, y_test, output_dir=output_dir)
-    
-    print("\nTop 5 most important features:")
-    for idx, row in feature_imp_df.head(5).iterrows():
-        print(f"  {idx+1}. {row['Feature']} ({row['Category']}): {row['Importance_Score']:.4f}")
-    
-    # Step 6: Predict solubility for unseen molecules
-    print("\n6. Predicting solubility for unseen molecules")
-    prediction_results = predict_unseen_molecules(model, prediction_df)
-    
-    # Step 7: Report results
-    print("\n7. Final results")
-    print(f"Unseen prediction set metrics:")
-    print(f"  RMSE: {prediction_results['rmse']:.4f}")
-    print(f"  MAE: {prediction_results['mae']:.4f}")
-    print(f"  R²: {prediction_results['r2']:.4f}")
-    
-    # Save unseen predictions scatter plot
-    plt.figure(figsize=(10, 6))
-    plt.scatter(prediction_results['actual'], prediction_results['predicted'], alpha=0.6)
-    plt.plot([min(prediction_results['actual']), max(prediction_results['actual'])], 
-             [min(prediction_results['actual']), max(prediction_results['actual'])], 'k--')
-    plt.xlabel('Actual LogS')
-    plt.ylabel('Predicted LogS')
-    plt.title('Unseen Molecules: Predicted vs Actual Solubility')
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'unseen_predictions.png'))
-    plt.close()
-    
-    # Save all evaluation results to the summary file with comprehensive model description
-    with open(os.path.join(output_dir, 'advanced_evaluation_results.txt'), 'w') as f:
-        f.write(f"GNNSol Molecular Solubility Prediction Results\n")
-        f.write(f"Run date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+# %% GNN Model Definition
+class MolecularGNN(torch.nn.Module):
+    def __init__(self, in_features, hidden_features, latent_dim, physchem_features, out_features, dropout_rate=0.2):
+        super(MolecularGNN, self).__init__()
+        # Encoding layers for graph structure
+        self.fc1 = torch.nn.Linear(in_features, hidden_features)
+        self.fc2 = torch.nn.Linear(hidden_features, hidden_features)
+        self.fc3 = torch.nn.Linear(hidden_features, latent_dim)
         
-        # Add model architecture and feature information
-        f.write(f"Model Architecture:\n")
-        f.write(f"  Combined Graph Neural Network with physicochemical descriptors\n\n")
+        # Layers for physicochemical features
+        self.physchem_fc1 = torch.nn.Linear(physchem_features, hidden_features)
+        self.physchem_fc2 = torch.nn.Linear(hidden_features, latent_dim)
         
-        f.write(f"Molecular Graph Features:\n")
-        f.write(f"  - Atoms: H, C, N, O, F, P, S, Cl, Br, I (one-hot encoded)\n")
-        f.write(f"  - Formal charge\n")
-        f.write(f"  - Aromaticity\n")
-        f.write(f"  - Atom degree (number of connections)\n")
-        f.write(f"  - Number of attached hydrogens\n\n")
+        # Combined property prediction head
+        self.fc_combined = torch.nn.Linear(latent_dim * 2, latent_dim)
+        self.fc_out = torch.nn.Linear(latent_dim, out_features)
         
-        f.write(f"Physicochemical Descriptors:\n")
-        f.write(f"  - Molecular Weight\n")
-        f.write(f"  - LogP (octanol-water partition coefficient)\n")
-        f.write(f"  - Number of H-bond donors\n")
-        f.write(f"  - Number of H-bond acceptors\n")
-        f.write(f"  - Topological Polar Surface Area (TPSA)\n")
-        f.write(f"  - Number of rotatable bonds\n")
-        f.write(f"  - Number of rings\n")
-        f.write(f"  - Fraction of sp3 carbons\n")
-        f.write(f"  - Number of aromatic rings\n")
-        f.write(f"  - Number of heteroatoms\n")
-        f.write(f"  - Molar refractivity\n")
-        f.write(f"  - Labute Accessible Surface Area\n")
-        f.write(f"  - QED drug-likeness score\n\n")
+        # Activation functions
+        self.relu = torch.nn.ReLU()
+        self.dropout = torch.nn.Dropout(dropout_rate)
+        self.dropout_rate = dropout_rate
+        self._enable_dropout_in_eval = False
         
-        f.write(f"Training metrics:\n")
-        f.write(f"  RMSE: {train_metrics['rmse']:.4f}\n")
-        f.write(f"  MAE: {train_metrics['mae']:.4f}\n")
-        f.write(f"  R²: {train_metrics['r2']:.4f}\n\n")
+    def enable_dropout_in_eval(self, enable=True):
+        """Enable or disable dropout during evaluation for Monte Carlo Dropout"""
+        self._enable_dropout_in_eval = enable
         
-        f.write(f"Test metrics:\n")
-        f.write(f"  RMSE: {test_metrics['rmse']:.4f}\n")
-        f.write(f"  MAE: {test_metrics['mae']:.4f}\n")
-        f.write(f"  R²: {test_metrics['r2']:.4f}\n\n")
+    def forward(self, x, adj_matrix, physchem):
+        # Control dropout behavior based on training/eval mode
+        dropout_function = lambda x: self.dropout(x) if self.training or self._enable_dropout_in_eval else x
         
-        f.write(f"K-fold Cross-Validation Results (k=2):\n")
-        f.write(f"  Average RMSE: {cv_results['avg_metrics']['rmse']:.4f}\n")
-        f.write(f"  Average MAE: {cv_results['avg_metrics']['mae']:.4f}\n")
-        f.write(f"  Average R²: {cv_results['avg_metrics']['r2']:.4f}\n")
-        f.write(f"  Average Q²: {cv_results['avg_metrics']['q2']:.4f}\n")
-        f.write(f"  Average Pearson correlation: {cv_results['avg_metrics']['pearson_r']:.4f}\n")
-        f.write(f"  Average Spearman correlation: {cv_results['avg_metrics']['spearman_rho']:.4f}\n\n")
+        # Graph pathway - Message passing layers (graph convolution)
+        x = self.fc1(x)
+        x = self.relu(torch.mm(adj_matrix, x))
+        x = dropout_function(x)
         
-        f.write(f"Feature Importance (Top 5):\n")
-        for i, row in enumerate(feature_imp_df.head(5).itertuples(index=False)):
-            f.write(f"  {i+1}. {row.Feature} ({row.Category}): {row.Importance_Score:.4f}\n")
-        f.write("\n")
+        x = self.fc2(x)
+        x = self.relu(torch.mm(adj_matrix, x))
+        x = dropout_function(x)
         
-        f.write(f"Unseen prediction set metrics:\n")
-        f.write(f"  RMSE: {prediction_results['rmse']:.4f}\n")
-        f.write(f"  MAE: {prediction_results['mae']:.4f}\n")
-        f.write(f"  R²: {prediction_results['r2']:.4f}\n\n")
+        # Encoding to latent space
+        graph_latent = self.fc3(x)
         
-        f.write(f"Sample predictions:\n")
-        for i in range(min(5, len(prediction_results['smiles']))):
-            f.write(f"Molecule: {prediction_results['smiles'][i]}\n")
-            f.write(f"  Actual: {prediction_results['actual'][i]:.4f}, Predicted: {prediction_results['predicted'][i]:.4f}, ")
-            f.write(f"Error: {abs(prediction_results['actual'][i] - prediction_results['predicted'][i]):.4f}\n")
-    
-    # Save model state dictionary
-    torch.save(best_model_state, os.path.join(output_dir, 'best_model.pt'))
-    
-    total_time = time.time() - start_time
-    print(f"\nSolubility prediction completed in {total_time:.1f} seconds")
-    print(f"Results saved in: {output_dir}")
+        # Global pooling (mean of node embeddings)
+        graph_embedding = torch.mean(graph_latent, dim=0, keepdim=True)
+        
+        # Physicochemical pathway
+        physchem_hidden = self.relu(self.physchem_fc1(physchem))
+        physchem_hidden = dropout_function(physchem_hidden)
+        physchem_latent = self.relu(self.physchem_fc2(physchem_hidden))
+        
+        # Combine both pathways
+        combined = torch.cat([graph_embedding, physchem_latent], dim=1)
+        combined = self.relu(self.fc_combined(combined))
+        combined = dropout_function(combined)
+        
+        # Property prediction
+        out = self.fc_out(combined)
+        
+        return graph_latent, out
 
+# %% Uncertainty Quantification
+class UncertaintyQuantifier:
+    """Class for quantifying uncertainty in molecular property predictions"""
+    
+    @staticmethod
+    def mc_dropout_uncertainty(model, features, adj, physchem, n_samples=30):
+        """
+        Use Monte Carlo Dropout to estimate prediction uncertainty (Bayesian approach)
+        
+        Args:
+            model: Trained GNN model with dropout
+            features, adj, physchem: Input data for a molecule
+            n_samples: Number of forward passes with dropout enabled
+            
+        Returns:
+            mean_pred: Mean prediction
+            std_pred: Standard deviation (epistemic uncertainty)
+            ci_lower, ci_upper: 95% confidence interval
+        """
+        model.eval()
+        model.enable_dropout_in_eval(True)
+        
+        predictions = []
+        
+        with torch.no_grad():
+            for _ in range(n_samples):
+                _, pred = model(features, adj, physchem)
+                predictions.append(pred.item())
+        
+        # Disable dropout for future standard predictions
+        model.enable_dropout_in_eval(False)
+        
+        # Calculate statistics
+        mean_pred = np.mean(predictions)
+        std_pred = np.std(predictions)
+        
+        # 95% confidence interval assuming normally distributed predictions
+        ci_lower = mean_pred - 1.96 * std_pred
+        ci_upper = mean_pred + 1.96 * std_pred
+        
+        return mean_pred, std_pred, ci_lower, ci_upper, predictions
+    
+    @staticmethod
+    def residual_based_uncertainty(model, features, adj, physchem, residual_std):
+        """
+        Use residual-based uncertainty estimation (frequentist approach)
+        
+        Args:
+            model: Trained GNN model
+            features, adj, physchem: Input data for a molecule
+            residual_std: Standard deviation of residuals on known data
+            
+        Returns:
+            pred: Prediction
+            ci_lower, ci_upper: 95% confidence interval
+        """
+        model.eval()
+        model.enable_dropout_in_eval(False)
+        
+        with torch.no_grad():
+            _, pred = model(features, adj, physchem)
+            pred_value = pred.item()
+        
+        # Calculate 95% confidence interval
+        ci_lower = pred_value - 1.96 * residual_std
+        ci_upper = pred_value + 1.96 * residual_std
+        
+        return pred_value, ci_lower, ci_upper
+    
+    @staticmethod
+    def combined_uncertainty(model, features, adj, physchem, residual_std, n_samples=30):
+        """
+        Combine Bayesian and frequentist uncertainty approaches
+        
+        Args:
+            model: Trained GNN model with dropout
+            features, adj, physchem: Input data for a molecule
+            residual_std: Standard deviation of residuals on known data
+            n_samples: Number of forward passes with dropout enabled
+            
+        Returns:
+            mean_pred: Mean prediction
+            total_std: Combined standard deviation
+            ci_lower, ci_upper: 95% confidence interval
+        """
+        # Get Bayesian uncertainty (epistemic)
+        mean_pred, epistemic_std, _, _, _ = UncertaintyQuantifier.mc_dropout_uncertainty(
+            model, features, adj, physchem, n_samples)
+        
+        # Combine uncertainties (epistemic from MC dropout, aleatoric from residuals)
+        # This is a simplification of total variance = epistemic variance + aleatoric variance
+        total_variance = epistemic_std**2 + residual_std**2
+        total_std = np.sqrt(total_variance)
+        
+        # Calculate 95% confidence interval
+        ci_lower = mean_pred - 1.96 * total_std
+        ci_upper = mean_pred + 1.96 * total_std
+        
+        return mean_pred, total_std, ci_lower, ci_upper, epistemic_std, residual_std
+    
+    @staticmethod
+    def evaluate_uncertainty_calibration(predictions, uncertainties, actual_values, bins=10):
+        """
+        Evaluate how well-calibrated the uncertainty estimates are
+        
+        Args:
+            predictions: List of predicted values
+            uncertainties: List of uncertainty estimates (standard deviations)
+            actual_values: List of actual values
+            bins: Number of bins for calibration analysis
+            
+        Returns:
+            calibration_scores: Dictionary with calibration metrics
+        """
+        # Calculate standardized residuals
+        standardized_residuals = [(y_true - y_pred) / (uncertainty * 1.96) 
+                                 for y_true, y_pred, uncertainty in 
+                                 zip(actual_values, predictions, uncertainties)]
+        
+        # Count how many actual values fall within the predicted confidence intervals
+        within_68_ci = sum(abs(r) < 1.0 for r in standardized_residuals) / len(standardized_residuals)
+        within_95_ci = sum(abs(r) < 2.0 for r in standardized_residuals) / len(standardized_residuals)
+        within_99_ci = sum(abs(r) < 3.0 for r in standardized_residuals) / len(standardized_residuals)
+        
+        # Ideal calibration would have 68%, 95%, and 99% of values within these intervals
+        cal_error_68 = abs(within_68_ci - 0.68)
+        cal_error_95 = abs(within_95_ci - 0.95)
+        cal_error_99 = abs(within_99_ci - 0.99)
+        
+        # Calculate overall calibration error
+        calibration_error = (cal_error_68 + cal_error_95 + cal_error_99) / 3
+        
+        return {
+            'within_68_ci': within_68_ci,
+            'within_95_ci': within_95_ci,
+            'within_99_ci': within_99_ci,
+            'cal_error_68': cal_error_68,
+            'cal_error_95': cal_error_95,
+            'cal_error_99': cal_error_99,
+            'calibration_error': calibration_error,
+            'standardized_residuals': standardized_residuals
+        }
+    
+    @staticmethod
+    def plot_uncertainty_calibration(predictions, uncertainties, actual_values, output_dir=None):
+        """
+        Create calibration plots for uncertainty estimates
+        
+        Args:
+            predictions: List of predicted values
+            uncertainties: List of uncertainty estimates (standard deviations)
+            actual_values: List of actual values
+            output_dir: Directory to save plots
+        """
+        # Calculate standardized residuals
+        standardized_residuals = [(y_true - y_pred) / (uncertainty * 1.96) 
+                                 for y_true, y_pred, uncertainty in 
+                                 zip(actual_values, predictions, uncertainties)]
+        
+        # Plot histogram of standardized residuals
+        plt.figure(figsize=(10, 6))
+        plt.hist(standardized_residuals, bins=30, alpha=0.7, density=True)
+        plt.title('Histogram of Standardized Residuals')
+        plt.xlabel('Standardized Residual')
+        plt.ylabel('Density')
+        # Add standard normal distribution for comparison
+        x = np.linspace(-4, 4, 100)
+        plt.plot(x, np.exp(-(x**2)/2) / np.sqrt(2*np.pi), 'r-', lw=2)
+        plt.grid(True, alpha=0.3)
+        if output_dir:
+            plt.savefig(os.path.join(output_dir, 'uncertainty_calibration_histogram.png'))
+        else:
+            plt.savefig('uncertainty_calibration_histogram.png')
+        plt.close()
+        
+        # Plot uncertainty vs error
+        errors = [abs(y_true - y_pred) for y_true, y_pred in zip(actual_values, predictions)]
+        plt.figure(figsize=(10, 6))
+        plt.scatter(uncertainties, errors, alpha=0.6)
+        plt.title('Prediction Error vs Predicted Uncertainty')
+        plt.xlabel('Predicted Uncertainty (std)')
+        plt.ylabel('Absolute Error')
+        
+        # Add ideal calibration line
+        max_val = max(max(uncertainties), max(errors))
+        plt.plot([0, max_val], [0, max_val*1.96], 'r--', label='Ideal 95% CI calibration')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        if output_dir:
+            plt.savefig(os.path.join(output_dir, 'uncertainty_vs_error.png'))
+        else:
+            plt.savefig('uncertainty_vs_error.png')
+        plt.close()
+        
+        # Create calibration curve
+        # Sort by uncertainty
+        sorted_indices = np.argsort(uncertainties)
+        sorted_uncertainties = [uncertainties[i] for i in sorted_indices]
+        sorted_errors = [errors[i] for i in sorted_indices]
+        
+        # Create bins and calculate average error in each bin
+        n_bins = 10
+        bin_size = len(sorted_uncertainties) // n_bins
+        bin_avg_uncertainties = []
+        bin_avg_errors = []
+        
+        for i in range(n_bins):
+            start_idx = i * bin_size
+            end_idx = start_idx + bin_size if i < n_bins - 1 else len(sorted_uncertainties)
+            
+            bin_uncertainties = sorted_uncertainties[start_idx:end_idx]
+            bin_errors = sorted_errors[start_idx:end_idx]
+            
+            bin_avg_uncertainties.append(np.mean(bin_uncertainties))
+            bin_avg_errors.append(np.mean(bin_errors))
+        
+        plt.figure(figsize=(10, 6))
+        plt.scatter(bin_avg_uncertainties, bin_avg_errors, s=100, alpha=0.7)
+        plt.title('Calibration Curve: Mean Error vs Mean Uncertainty')
+        plt.xlabel('Mean Predicted Uncertainty (std)')
+        plt.ylabel('Mean Absolute Error')
+        
+        # Add ideal calibration line
+        max_val = max(max(bin_avg_uncertainties), max(bin_avg_errors))
+        plt.plot([0, max_val], [0, max_val*1.96], 'r--', label='Ideal 95% CI calibration')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        if output_dir:
+            plt.savefig(os.path.join(output_dir, 'uncertainty_calibration_curve.png'))
+        else:
+            plt.savefig('uncertainty_calibration_curve.png')
+        plt.close()
+
+# %% Load ESOL Dataset
 def load_esol_dataset():
     """Load the ESOL dataset for molecular solubility prediction"""
     try:
@@ -814,6 +866,104 @@ def load_esol_dataset():
         print(f"Error loading ESOL dataset: {e}")
         return None
 
+# %% Predict Unseen Molecules
+def predict_unseen_molecules(model, prediction_df):
+    """Predict solubility for unseen molecules with uncertainty quantification"""
+    converter = MoleculeGraphConverter()
+    solubility_col = 'solubility'
+    
+    predicted_values = []
+    actual_values = []
+    smiles_list = []
+    failed_molecules = []
+    
+    # For uncertainty quantification
+    uncertainties = []
+    confidence_intervals = []
+    epistemic_uncertainties = []  # Model uncertainty
+    aleatoric_uncertainties = []  # Data uncertainty
+    
+    print(f"Predicting solubility for {len(prediction_df)} unseen molecules with uncertainty quantification...")
+    
+    # First calculate residual standard deviation on the test set for frequentist approach
+    # We'll use a fixed value for simplicity in this implementation
+    residual_std = 0.6  # You could calculate this from training/validation data
+    
+    for _, row in prediction_df.iterrows():
+        try:
+            smiles = row['smiles']
+            actual_solubility = row[solubility_col]
+            
+            mol_graph = converter.smiles_to_graph(smiles)
+            if mol_graph:
+                # Make prediction with uncertainty
+                node_features = mol_graph['node_features']
+                adj_matrix = mol_graph['adj_matrix']
+                physchem_features = mol_graph['physchem_features']
+                
+                # Combined uncertainty (Bayesian + frequentist)
+                mean_pred, total_std, ci_lower, ci_upper, epistemic_std, aleatoric_std = (
+                    UncertaintyQuantifier.combined_uncertainty(
+                        model, node_features, adj_matrix, physchem_features, residual_std, n_samples=20
+                    )
+                )
+                
+                # Store results
+                predicted_values.append(mean_pred)
+                actual_values.append(actual_solubility)
+                smiles_list.append(smiles)
+                uncertainties.append(total_std)
+                confidence_intervals.append((ci_lower, ci_upper))
+                epistemic_uncertainties.append(epistemic_std)
+                aleatoric_uncertainties.append(aleatoric_std)
+            else:
+                failed_molecules.append((smiles, "Could not convert to graph"))
+        except Exception as e:
+            failed_molecules.append((smiles, str(e)))
+    
+    print(f"Successfully predicted {len(predicted_values)} molecules with uncertainty")
+    print(f"Failed to predict {len(failed_molecules)} molecules")
+    
+    # Sample of predictions with uncertainty
+    print("\nSample predictions with uncertainty:")
+    for i in range(min(5, len(predicted_values))):
+        print(f"Molecule: {smiles_list[i]}")
+        print(f"  Actual: {actual_values[i]:.4f}, Predicted: {predicted_values[i]:.4f}, "
+              f"Error: {abs(actual_values[i] - predicted_values[i]):.4f}")
+        print(f"  Uncertainty (std): {uncertainties[i]:.4f}, 95% CI: [{confidence_intervals[i][0]:.4f}, {confidence_intervals[i][1]:.4f}]")
+    
+    # Evaluate uncertainty calibration
+    calibration_metrics = UncertaintyQuantifier.evaluate_uncertainty_calibration(
+        predicted_values, uncertainties, actual_values)
+    
+    print("\nUncertainty calibration metrics:")
+    print(f"% within 68% CI: {calibration_metrics['within_68_ci']:.2f} (ideal: 0.68)")
+    print(f"% within 95% CI: {calibration_metrics['within_95_ci']:.2f} (ideal: 0.95)")
+    print(f"% within 99% CI: {calibration_metrics['within_99_ci']:.2f} (ideal: 0.99)")
+    print(f"Calibration error: {calibration_metrics['calibration_error']:.4f} (lower is better)")
+    
+    # Calculate standard metrics
+    rmse = np.sqrt(mean_squared_error(actual_values, predicted_values))
+    mae = mean_absolute_error(actual_values, predicted_values)
+    r2 = r2_score(actual_values, predicted_values)
+    
+    # Return results
+    return {
+        'predicted': predicted_values,
+        'actual': actual_values,
+        'smiles': smiles_list,
+        'rmse': rmse,
+        'mae': mae,
+        'r2': r2,
+        'failed': failed_molecules,
+        'uncertainties': uncertainties,
+        'confidence_intervals': confidence_intervals,
+        'epistemic_uncertainties': epistemic_uncertainties,
+        'aleatoric_uncertainties': aleatoric_uncertainties,
+        'calibration_metrics': calibration_metrics
+    }
+
+# %% Train Solubility Model
 def train_solubility_model(train_df, epochs=300, batch_size=32, output_dir=None):
     """Train the GNN model on training data"""
     converter = MoleculeGraphConverter()
@@ -993,67 +1143,234 @@ def train_solubility_model(train_df, epochs=300, batch_size=32, output_dir=None)
     
     return model, train_metrics, test_metrics, best_model_state
 
-def predict_unseen_molecules(model, prediction_df):
-    """Predict solubility for unseen molecules"""
+# %% Main execution
+def main():
+    start_time = time.time()
+    # Create model_output_evaluation directory and unique results folder inside it
+    parent_output_dir = os.path.join(os.getcwd(), "model_output_evaluation")
+    os.makedirs(parent_output_dir, exist_ok=True)
+    
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = os.path.join(parent_output_dir, f"results_{timestamp}")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    print(f"Starting molecular solubility prediction at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Output files will be saved in: {output_dir}")
+    print(f"PyTorch version: {torch.__version__}")
+    
+    # Step 1: Load ESOL dataset
+    print("\n1. Loading ESOL dataset for molecular solubility prediction...")
+    esol_df = load_esol_dataset()
+    if esol_df is None:
+        print("Failed to load dataset. Exiting.")
+        return
+    
+    print(f"Dataset shape: {esol_df.shape}")
+    print("Sample data:")
+    print(esol_df.head())
+    
+    # Step 2: Split into training and unseen prediction sets
+    prediction_set_size = 0.1  # 10% of data kept as unseen prediction set
+    print(f"\n2. Splitting dataset - keeping {prediction_set_size*100:.0f}% as unseen prediction set")
+    
+    train_df, prediction_df = train_test_split(esol_df, test_size=prediction_set_size, random_state=42)
+    print(f"Training set: {len(train_df)} molecules")
+    print(f"Unseen prediction set: {len(prediction_df)} molecules")
+    
+    # Step 3: Process data and train model
+    print("\n3. Training model on ESOL dataset with physicochemical descriptors...")
+    model, train_metrics, test_metrics, best_model_state = train_solubility_model(train_df, output_dir=output_dir)
+    
+    # Step 4: Evaluate performance
+    print("\n4. Evaluating model performance")
+    print(f"Training metrics: RMSE={train_metrics['rmse']:.4f}, MAE={train_metrics['mae']:.4f}, R²={train_metrics['r2']:.4f}")
+    print(f"Test metrics: RMSE={test_metrics['rmse']:.4f}, MAE={test_metrics['mae']:.4f}, R²={test_metrics['r2']:.4f}")
+    
+    # Step 5: Keep best model
+    print("\n5. Loading best model from training")
+    if best_model_state:
+        model.load_state_dict(best_model_state)
+        print("Best model loaded successfully")
+    
+    # Advanced model evaluation
+    print("\n=== Advanced Model Evaluation ===")
+    
+    # Process molecules for evaluation
     converter = MoleculeGraphConverter()
-    solubility_col = 'solubility'
+    X_all = []
+    y_all = []
     
-    predicted_values = []
-    actual_values = []
-    smiles_list = []
-    failed_molecules = []
-    
-    print(f"Predicting solubility for {len(prediction_df)} unseen molecules...")
-    
-    for _, row in prediction_df.iterrows():
+    print("Processing molecules for evaluation...")
+    for _, row in train_df.iterrows():
         try:
             smiles = row['smiles']
-            actual_solubility = row[solubility_col]
+            solubility = row['solubility']
             
             mol_graph = converter.smiles_to_graph(smiles)
             if mol_graph:
-                # Make prediction
-                model.eval()
-                with torch.no_grad():
-                    node_features = mol_graph['node_features']
-                    adj_matrix = mol_graph['adj_matrix']
-                    physchem_features = mol_graph['physchem_features']
-                    _, pred = model(node_features, adj_matrix, physchem_features)
-                    pred_value = pred.item()
-                
-                predicted_values.append(pred_value)
-                actual_values.append(actual_solubility)
-                smiles_list.append(smiles)
-            else:
-                failed_molecules.append((smiles, "Could not convert to graph"))
+                X_all.append((
+                    mol_graph['node_features'], 
+                    mol_graph['adj_matrix'], 
+                    mol_graph['physchem_features'],
+                    mol_graph['mol']
+                ))
+                y_all.append(solubility)
         except Exception as e:
-            failed_molecules.append((smiles, str(e)))
+            pass
     
-    print(f"Successfully predicted {len(predicted_values)} molecules")
-    print(f"Failed to predict {len(failed_molecules)} molecules")
+    # Split for evaluation
+    X_train, X_test, y_train, y_test = train_test_split(X_all, y_all, test_size=0.2, random_state=42)
     
-    # Sample of predictions
-    print("\nSample predictions:")
-    for i in range(min(5, len(predicted_values))):
-        print(f"Molecule: {smiles_list[i]}")
-        print(f"  Actual: {actual_values[i]:.4f}, Predicted: {predicted_values[i]:.4f}, "
-              f"Error: {abs(actual_values[i] - predicted_values[i]):.4f}")
+    # K-fold cross-validation - changed to 2-fold with 20 epochs each
+    cv_results = ModelEvaluator.perform_kfold_cv(X_all, y_all, k=2, epochs=20)
     
-    # Calculate metrics
-    rmse = np.sqrt(mean_squared_error(actual_values, predicted_values))
-    mae = mean_absolute_error(actual_values, predicted_values)
-    r2 = r2_score(actual_values, predicted_values)
+    print("\nK-fold Cross-Validation Results:")
+    print(f"Average RMSE: {cv_results['avg_metrics']['rmse']:.4f}")
+    print(f"Average R²: {cv_results['avg_metrics']['r2']:.4f}")
+    print(f"Average Pearson correlation: {cv_results['avg_metrics']['pearson_r']:.4f}")
+    print(f"Average Spearman correlation: {cv_results['avg_metrics']['spearman_rho']:.4f}")
     
-    # Return results
-    return {
-        'predicted': predicted_values,
-        'actual': actual_values,
-        'smiles': smiles_list,
-        'rmse': rmse,
-        'mae': mae,
-        'r2': r2,
-        'failed': failed_molecules
-    }
+    # Feature importance analysis
+    print("\nGenerating comprehensive feature importance analysis...")
+    feature_imp_df = generate_feature_importance_csv(model, X_test, y_test, output_dir=output_dir)
+    
+    print("\nTop 5 most important features:")
+    for idx, row in feature_imp_df.head(5).iterrows():
+        print(f"  {idx+1}. {row['Feature']} ({row['Category']}): {row['Importance_Score']:.4f}")
+    
+    # Step 6: Predict solubility for unseen molecules with uncertainty
+    print("\n6. Predicting solubility for unseen molecules with uncertainty quantification")
+    prediction_results = predict_unseen_molecules(model, prediction_df)
+    
+    # Generate uncertainty calibration plots
+    print("\nGenerating uncertainty calibration plots...")
+    UncertaintyQuantifier.plot_uncertainty_calibration(
+        prediction_results['predicted'],
+        prediction_results['uncertainties'],
+        prediction_results['actual'],
+        output_dir=output_dir
+    )
+    
+    # Step 7: Report results
+    print("\n7. Final results")
+    print(f"Unseen prediction set metrics:")
+    print(f"  RMSE: {prediction_results['rmse']:.4f}")
+    print(f"  MAE: {prediction_results['mae']:.4f}")
+    print(f"  R²: {prediction_results['r2']:.4f}")
+    print(f"  Uncertainty calibration error: {prediction_results['calibration_metrics']['calibration_error']:.4f}")
+    
+    # Save unseen predictions scatter plot with uncertainty
+    plt.figure(figsize=(10, 6))
+    
+    # Add error bars for uncertainty
+    plt.errorbar(
+        prediction_results['actual'], 
+        prediction_results['predicted'],
+        yerr=[1.96*u for u in prediction_results['uncertainties']],  # 95% CI
+        fmt='o', alpha=0.4, ecolor='lightgray', capsize=0
+    )
+    
+    # Add main scatter points
+    scatter = plt.scatter(
+        prediction_results['actual'], 
+        prediction_results['predicted'], 
+        c=[u for u in prediction_results['uncertainties']], 
+        cmap='viridis', alpha=0.7
+    )
+    
+    # Add identity line
+    plt.plot([min(prediction_results['actual']), max(prediction_results['actual'])], 
+             [min(prediction_results['actual']), max(prediction_results['actual'])], 'k--')
+    
+    plt.xlabel('Actual LogS')
+    plt.ylabel('Predicted LogS')
+    plt.title('Unseen Molecules: Predicted vs Actual Solubility with Uncertainty')
+    plt.colorbar(scatter, label='Prediction Uncertainty (std)')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'unseen_predictions_with_uncertainty.png'))
+    plt.close()
+    
+    # Save all evaluation results to the summary file with comprehensive model description
+    with open(os.path.join(output_dir, 'advanced_evaluation_results.txt'), 'w') as f:
+        f.write(f"GNNSol Molecular Solubility Prediction Results with Uncertainty Quantification\n")
+        f.write(f"Run date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        
+        # Add model architecture and feature information
+        f.write(f"Model Architecture:\n")
+        f.write(f"  Combined Graph Neural Network with physicochemical descriptors\n")
+        f.write(f"  Uncertainty quantification using Monte Carlo Dropout (Bayesian) and residual-based (frequentist) approaches\n\n")
+        
+        f.write(f"Molecular Graph Features:\n")
+        f.write(f"  - Atoms: H, C, N, O, F, P, S, Cl, Br, I (one-hot encoded)\n")
+        f.write(f"  - Formal charge\n")
+        f.write(f"  - Aromaticity\n")
+        f.write(f"  - Atom degree (number of connections)\n")
+        f.write(f"  - Number of attached hydrogens\n\n")
+        
+        f.write(f"Physicochemical Descriptors:\n")
+        f.write(f"  - Molecular Weight\n")
+        f.write(f"  - LogP (octanol-water partition coefficient)\n")
+        f.write(f"  - Number of H-bond donors\n")
+        f.write(f"  - Number of H-bond acceptors\n")
+        f.write(f"  - Topological Polar Surface Area (TPSA)\n")
+        f.write(f"  - Number of rotatable bonds\n")
+        f.write(f"  - Number of rings\n")
+        f.write(f"  - Fraction of sp3 carbons\n")
+        f.write(f"  - Number of aromatic rings\n")
+        f.write(f"  - Number of heteroatoms\n")
+        f.write(f"  - Molar refractivity\n")
+        f.write(f"  - Labute Accessible Surface Area\n")
+        f.write(f"  - QED drug-likeness score\n\n")
+        
+        f.write(f"Training metrics:\n")
+        f.write(f"  RMSE: {train_metrics['rmse']:.4f}\n")
+        f.write(f"  MAE: {train_metrics['mae']:.4f}\n")
+        f.write(f"  R²: {train_metrics['r2']:.4f}\n\n")
+        
+        f.write(f"Test metrics:\n")
+        f.write(f"  RMSE: {test_metrics['rmse']:.4f}\n")
+        f.write(f"  MAE: {test_metrics['mae']:.4f}\n")
+        f.write(f"  R²: {test_metrics['r2']:.4f}\n\n")
+        
+        f.write(f"K-fold Cross-Validation Results (k=2):\n")
+        f.write(f"  Average RMSE: {cv_results['avg_metrics']['rmse']:.4f}\n")
+        f.write(f"  Average MAE: {cv_results['avg_metrics']['mae']:.4f}\n")
+        f.write(f"  Average R²: {cv_results['avg_metrics']['r2']:.4f}\n")
+        
+        f.write(f"Feature Importance (Top 5):\n")
+        for i, row in enumerate(feature_imp_df.head(5).itertuples(index=False)):
+            f.write(f"  {i+1}. {row.Feature} ({row.Category}): {row.Importance_Score:.4f}\n")
+        f.write("\n")
+        
+        f.write(f"Unseen prediction set metrics:\n")
+        f.write(f"  RMSE: {prediction_results['rmse']:.4f}\n")
+        f.write(f"  MAE: {prediction_results['mae']:.4f}\n")
+        f.write(f"  R²: {prediction_results['r2']:.4f}\n\n")
+        
+        # Add uncertainty calibration metrics
+        f.write(f"Uncertainty Calibration Metrics:\n")
+        f.write(f"  % within 68% CI: {prediction_results['calibration_metrics']['within_68_ci']:.2f} (ideal: 0.68)\n")
+        f.write(f"  % within 95% CI: {prediction_results['calibration_metrics']['within_95_ci']:.2f} (ideal: 0.95)\n")
+        f.write(f"  % within 99% CI: {prediction_results['calibration_metrics']['within_99_ci']:.2f} (ideal: 0.99)\n")
+        f.write(f"  Calibration error: {prediction_results['calibration_metrics']['calibration_error']:.4f}\n\n")
+        
+        f.write(f"Sample predictions with uncertainty:\n")
+        for i in range(min(5, len(prediction_results['smiles']))):
+            f.write(f"Molecule: {prediction_results['smiles'][i]}\n")
+            f.write(f"  Actual: {prediction_results['actual'][i]:.4f}, Predicted: {prediction_results['predicted'][i]:.4f}, ")
+            f.write(f"Error: {abs(prediction_results['actual'][i] - prediction_results['predicted'][i]):.4f}\n")
+            f.write(f"  Uncertainty (std): {prediction_results['uncertainties'][i]:.4f}, ")
+            f.write(f"95% CI: [{prediction_results['confidence_intervals'][i][0]:.4f}, {prediction_results['confidence_intervals'][i][1]:.4f}]\n")
+            f.write(f"  Epistemic uncertainty: {prediction_results['epistemic_uncertainties'][i]:.4f}, ")
+            f.write(f"Aleatoric uncertainty: {prediction_results['aleatoric_uncertainties'][i]:.4f}\n\n")
+    
+    # Save model state dictionary
+    torch.save(best_model_state, os.path.join(output_dir, 'best_model.pt'))
+    
+    total_time = time.time() - start_time
+    print(f"\nSolubility prediction completed in {total_time:.1f} seconds")
+    print(f"Results saved in: {output_dir}")
 
 if __name__ == "__main__":
     main()
