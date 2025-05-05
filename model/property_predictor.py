@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from model.gnn_encoder import GNNEncoder  # Add this import
 
 class PropertyPredictor(nn.Module):
     def __init__(self, latent_dim, hidden_dim=64, n_tasks=1):
