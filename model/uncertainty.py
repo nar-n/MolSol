@@ -7,6 +7,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+from scipy.stats import norm
 
 class UncertaintyQuantifier:
     """Class for quantifying uncertainty in molecular property predictions"""
@@ -84,35 +85,93 @@ class UncertaintyQuantifier:
         return pred, ci_lower, ci_upper
     
     @staticmethod
-    def combined_uncertainty(model, data, residual_std, n_samples=30):
+    def estimate_aleatoric_uncertainty(model, data, mc_predictions=None, n_samples=None):
         """
-        Combine Bayesian and frequentist uncertainty approaches
+        Estimate aleatoric uncertainty (data noise) dynamically
+        
+        Args:
+            model: Trained GNN model
+            data: PyTorch Geometric Data object
+            mc_predictions: Optional pre-computed MC dropout predictions
+            n_samples: Number of samples if mc_predictions is not provided
+            
+        Returns:
+            aleatoric_std: Estimated aleatoric uncertainty
+        """
+        # Use pre-computed predictions or generate new ones
+        if mc_predictions is None:
+            if n_samples is None:
+                n_samples = 20
+            
+            _, _, _, _, mc_predictions = UncertaintyQuantifier.mc_dropout_uncertainty(
+                model, data, n_samples)
+        
+        # Compute prediction mean
+        pred_mean = np.mean(mc_predictions)
+        
+        # Dynamic aleatoric uncertainty based on prediction value
+        # Higher uncertainty for more extreme values (very soluble or very insoluble)
+        baseline_noise = 0.3  # Baseline noise level
+        
+        # Increase uncertainty for predictions away from the typical range (-2 to -4)
+        if pred_mean > -2:
+            # More soluble compounds tend to have higher measurement variation
+            aleatoric_std = baseline_noise + 0.1 * abs(pred_mean + 2)
+        elif pred_mean < -4:
+            # Very insoluble compounds are harder to measure precisely
+            aleatoric_std = baseline_noise + 0.05 * abs(pred_mean + 4)
+        else:
+            # Compounds in the typical range
+            aleatoric_std = baseline_noise
+            
+        # Add small variance to ensure positive values
+        aleatoric_std = max(aleatoric_std, 0.1)
+        
+        return aleatoric_std
+    
+    @staticmethod
+    def combined_uncertainty(model, data, residual_std=None, n_samples=30):
+        """
+        Combine Bayesian and frequentist uncertainty approaches with dynamically estimated
+        aleatoric uncertainty per sample
         
         Args:
             model: Trained GNN model with dropout
             data: PyTorch Geometric Data object
-            residual_std: Standard deviation of residuals on known data
+            residual_std: Optional fixed residual std (if None, will be estimated per sample)
             n_samples: Number of forward passes with dropout enabled
             
         Returns:
             mean_pred: Mean prediction
             total_std: Combined standard deviation
             ci_lower, ci_upper: 95% confidence interval
+            epistemic_std: Model uncertainty
+            aleatoric_std: Data uncertainty
         """
-        # Get Bayesian uncertainty (epistemic)
-        mean_pred, epistemic_std, _, _, _ = UncertaintyQuantifier.mc_dropout_uncertainty(
+        # Get Bayesian uncertainty (epistemic) and MC predictions
+        mean_pred, epistemic_std, _, _, mc_predictions = UncertaintyQuantifier.mc_dropout_uncertainty(
             model, data, n_samples)
         
-        # Combine uncertainties (epistemic from MC dropout, aleatoric from residuals)
-        # This is a simplification of total variance = epistemic variance + aleatoric variance
-        total_variance = epistemic_std**2 + residual_std**2
+        # Estimate aleatoric uncertainty dynamically for this sample
+        if residual_std is None:
+            aleatoric_std = UncertaintyQuantifier.estimate_aleatoric_uncertainty(
+                model, data, mc_predictions)
+        else:
+            # Use provided residual_std as baseline but adjust based on prediction
+            pred_abs = abs(mean_pred)
+            # Increase uncertainty for more extreme predictions
+            adjustment_factor = 1.0 + 0.1 * max(0, pred_abs - 3) 
+            aleatoric_std = residual_std * adjustment_factor
+        
+        # Combine uncertainties (total variance = epistemic variance + aleatoric variance)
+        total_variance = epistemic_std**2 + aleatoric_std**2
         total_std = np.sqrt(total_variance)
         
-        # Calculate 95% confidence interval
+        # Calculate dynamic 95% confidence interval based on the combined uncertainty
         ci_lower = mean_pred - 1.96 * total_std
         ci_upper = mean_pred + 1.96 * total_std
         
-        return mean_pred, total_std, ci_lower, ci_upper, epistemic_std, residual_std
+        return mean_pred, total_std, ci_lower, ci_upper, epistemic_std, aleatoric_std
     
     @staticmethod
     def evaluate_uncertainty_calibration(predictions, uncertainties, actual_values, bins=10):
@@ -246,3 +305,114 @@ class UncertaintyQuantifier:
         else:
             plt.savefig('uncertainty_calibration_curve.png')
         plt.close()
+    
+    @staticmethod
+    def plot_uncertainty_components(predictions, epistemic_uncertainties, aleatoric_uncertainties, 
+                                   actual_values=None, output_dir=None):
+        """
+        Create plots showing the contribution of epistemic and aleatoric uncertainty components
+        
+        Args:
+            predictions: List of predicted values
+            epistemic_uncertainties: List of epistemic uncertainty values (std)
+            aleatoric_uncertainties: List of aleatoric uncertainty values (std)
+            actual_values: Optional list of actual values
+            output_dir: Directory to save plots
+        """
+        # Calculate total uncertainties
+        total_uncertainties = [np.sqrt(e**2 + a**2) for e, a in 
+                              zip(epistemic_uncertainties, aleatoric_uncertainties)]
+        
+        # Plot the relationship between prediction value and uncertainty components
+        plt.figure(figsize=(12, 6))
+        
+        # Sort by prediction for cleaner visualization
+        sorted_indices = np.argsort(predictions)
+        sorted_preds = [predictions[i] for i in sorted_indices]
+        sorted_epistemic = [epistemic_uncertainties[i] for i in sorted_indices]
+        sorted_aleatoric = [aleatoric_uncertainties[i] for i in sorted_indices]
+        sorted_total = [total_uncertainties[i] for i in sorted_indices]
+        
+        plt.plot(sorted_preds, sorted_epistemic, 'b-', alpha=0.7, label='Epistemic (Model Uncertainty)')
+        plt.plot(sorted_preds, sorted_aleatoric, 'r-', alpha=0.7, label='Aleatoric (Data Uncertainty)')
+        plt.plot(sorted_preds, sorted_total, 'k-', alpha=0.7, label='Total Uncertainty')
+        
+        plt.title('Uncertainty Components by Prediction Value')
+        plt.xlabel('Predicted Solubility (LogS)')
+        plt.ylabel('Uncertainty (Standard Deviation)')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        if output_dir:
+            plt.savefig(os.path.join(output_dir, 'uncertainty_components.png'))
+        else:
+            plt.savefig('uncertainty_components.png')
+        plt.close()
+        
+        # Stacked area chart of uncertainty contributions
+        plt.figure(figsize=(12, 6))
+        
+        # Calculate percentage contributions
+        epistemic_contrib = [e**2 / (e**2 + a**2) * 100 for e, a in 
+                            zip(sorted_epistemic, sorted_aleatoric)]
+        aleatoric_contrib = [a**2 / (e**2 + a**2) * 100 for e, a in 
+                            zip(sorted_epistemic, sorted_aleatoric)]
+        
+        plt.stackplot(sorted_preds, [epistemic_contrib, aleatoric_contrib], 
+                     labels=['Epistemic', 'Aleatoric'],
+                     colors=['blue', 'red'], alpha=0.7)
+        
+        plt.title('Relative Contribution of Uncertainty Components')
+        plt.xlabel('Predicted Solubility (LogS)')
+        plt.ylabel('Contribution (%)')
+        plt.legend()
+        plt.ylim(0, 100)
+        plt.grid(True, alpha=0.3)
+        
+        if output_dir:
+            plt.savefig(os.path.join(output_dir, 'uncertainty_contributions.png'))
+        else:
+            plt.savefig('uncertainty_contributions.png')
+        plt.close()
+        
+        # If actual values are provided, plot error vs uncertainty components
+        if actual_values is not None:
+            errors = [abs(a - p) for a, p in zip(actual_values, predictions)]
+            
+            plt.figure(figsize=(10, 8))
+            plt.subplot(2, 2, 1)
+            plt.scatter(epistemic_uncertainties, errors, alpha=0.6)
+            plt.title('Error vs Epistemic Uncertainty')
+            plt.xlabel('Epistemic Uncertainty')
+            plt.ylabel('Absolute Error')
+            plt.grid(True, alpha=0.3)
+            
+            plt.subplot(2, 2, 2)
+            plt.scatter(aleatoric_uncertainties, errors, alpha=0.6)
+            plt.title('Error vs Aleatoric Uncertainty')
+            plt.xlabel('Aleatoric Uncertainty')
+            plt.ylabel('Absolute Error')
+            plt.grid(True, alpha=0.3)
+            
+            plt.subplot(2, 2, 3)
+            plt.scatter(total_uncertainties, errors, alpha=0.6)
+            plt.title('Error vs Total Uncertainty')
+            plt.xlabel('Total Uncertainty')
+            plt.ylabel('Absolute Error')
+            plt.grid(True, alpha=0.3)
+            
+            plt.subplot(2, 2, 4)
+            plt.scatter(epistemic_uncertainties, aleatoric_uncertainties, 
+                       c=errors, cmap='viridis', alpha=0.6)
+            plt.colorbar(label='Absolute Error')
+            plt.title('Aleatoric vs Epistemic Uncertainty')
+            plt.xlabel('Epistemic Uncertainty')
+            plt.ylabel('Aleatoric Uncertainty')
+            plt.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            if output_dir:
+                plt.savefig(os.path.join(output_dir, 'error_vs_uncertainty.png'))
+            else:
+                plt.savefig('error_vs_uncertainty.png')
+            plt.close()

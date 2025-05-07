@@ -1,0 +1,21 @@
+2-FOLD CROSS-VALIDATION RESULTS (3x10 epochs)
+================================================
+
+Fold 1:
+  Best Validation Loss: 3.0154
+  Validation RMSE: 1.8992
+  Validation MAE: 1.5320
+  Validation R²: 0.2361
+
+Fold 2:
+  Best Validation Loss: 2.2173
+  Validation RMSE: 1.4817
+  Validation MAE: 1.2051
+  Validation R²: 0.3128
+
+Average across folds:
+  Validation RMSE: 1.6904
+  Validation MAE: 1.3686
+  Validation R²: 0.2744
+
+Total cross-validation time: 2.40 seconds

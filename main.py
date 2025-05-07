@@ -203,7 +203,7 @@ def load_esol_dataset():
         return None
 
 # %% Predict Unseen Molecules
-def predict_unseen_molecules(model, prediction_df):
+def predict_unseen_molecules(model, prediction_df, output_dir=None):
     """Predict solubility for unseen molecules with uncertainty quantification"""
     converter = SMILESToGraph()
     solubility_col = 'solubility'
@@ -219,11 +219,7 @@ def predict_unseen_molecules(model, prediction_df):
     epistemic_uncertainties = []  # Model uncertainty
     aleatoric_uncertainties = []  # Data uncertainty
     
-    print(f"Predicting solubility for {len(prediction_df)} unseen molecules with uncertainty quantification...")
-    
-    # First calculate residual standard deviation on the test set for frequentist approach
-    # We'll use a fixed value for simplicity in this implementation
-    residual_std = 0.6  # You could calculate this from training/validation data
+    print(f"Predicting solubility for {len(prediction_df)} unseen molecules with dynamic uncertainty quantification...")
     
     for _, row in prediction_df.iterrows():
         try:
@@ -233,10 +229,10 @@ def predict_unseen_molecules(model, prediction_df):
             # Convert SMILES to PyG data object
             data = converter.convert(smiles)
             if data is not None:
-                # Make prediction with uncertainty
+                # Make prediction with uncertainty - use None for residual_std to enable dynamic estimation
                 mean_pred, total_std, ci_lower, ci_upper, epistemic_std, aleatoric_std = (
                     UncertaintyQuantifier.combined_uncertainty(
-                        model, data, residual_std, n_samples=20
+                        model, data, residual_std=None, n_samples=30
                     )
                 )
                 
@@ -257,12 +253,14 @@ def predict_unseen_molecules(model, prediction_df):
     print(f"Failed to predict {len(failed_molecules)} molecules")
     
     # Sample of predictions with uncertainty
-    print("\nSample predictions with uncertainty:")
+    print("\nSample predictions with uncertainty (both components):")
     for i in range(min(5, len(predicted_values))):
         print(f"Molecule: {smiles_list[i]}")
         print(f"  Actual: {actual_values[i]:.4f}, Predicted: {predicted_values[i]:.4f}, "
               f"Error: {abs(actual_values[i] - predicted_values[i]):.4f}")
-        print(f"  Uncertainty (std): {uncertainties[i]:.4f}, 95% CI: [{confidence_intervals[i][0]:.4f}, {confidence_intervals[i][1]:.4f}]")
+        print(f"  Total uncertainty (std): {uncertainties[i]:.4f}, 95% CI: [{confidence_intervals[i][0]:.4f}, {confidence_intervals[i][1]:.4f}]")
+        print(f"  Epistemic uncertainty: {epistemic_uncertainties[i]:.4f}, Aleatoric uncertainty: {aleatoric_uncertainties[i]:.4f}")
+        print(f"  Uncertainty ratio (epistemic/aleatoric): {epistemic_uncertainties[i]/max(aleatoric_uncertainties[i], 0.0001):.2f}")
     
     # Evaluate uncertainty calibration
     calibration_metrics = UncertaintyQuantifier.evaluate_uncertainty_calibration(
@@ -273,6 +271,17 @@ def predict_unseen_molecules(model, prediction_df):
     print(f"% within 95% CI: {calibration_metrics['within_95_ci']:.2f} (ideal: 0.95)")
     print(f"% within 99% CI: {calibration_metrics['within_99_ci']:.2f} (ideal: 0.99)")
     print(f"Calibration error: {calibration_metrics['calibration_error']:.4f} (lower is better)")
+    
+    # Generate uncertainty component plots
+    if output_dir:
+        print("\nGenerating uncertainty component analysis plots...")
+        UncertaintyQuantifier.plot_uncertainty_components(
+            predicted_values,
+            epistemic_uncertainties,
+            aleatoric_uncertainties,
+            actual_values,
+            output_dir=output_dir
+        )
     
     # Calculate standard metrics
     rmse = np.sqrt(mean_squared_error(actual_values, predicted_values))
@@ -603,7 +612,7 @@ def main():
     
     # Step 6: Predict solubility for unseen molecules with uncertainty
     print("\n6. Predicting solubility for unseen molecules with uncertainty quantification")
-    prediction_results = predict_unseen_molecules(model, prediction_df)
+    prediction_results = predict_unseen_molecules(model, prediction_df, output_dir)
     
     # Generate uncertainty calibration plots
     print("\nGenerating uncertainty calibration plots...")
@@ -751,6 +760,28 @@ def main():
             f.write(f"95% CI: [{prediction_results['confidence_intervals'][i][0]:.4f}, {prediction_results['confidence_intervals'][i][1]:.4f}]\n")
             f.write(f"  Epistemic uncertainty: {prediction_results['epistemic_uncertainties'][i]:.4f}, ")
             f.write(f"Aleatoric uncertainty: {prediction_results['aleatoric_uncertainties'][i]:.4f}\n\n")
+        
+        # Detailed uncertainty analysis
+        f.write("\nDetailed Uncertainty Analysis:\n")
+        f.write("============================\n\n")
+        f.write("Dynamic per-sample uncertainty estimation was used, with both components:\n")
+        f.write("  - Epistemic uncertainty: Model uncertainty from MC dropout\n")
+        f.write("  - Aleatoric uncertainty: Data uncertainty estimated dynamically\n\n")
+        
+        f.write("Average uncertainty metrics:\n")
+        f.write(f"  Mean epistemic uncertainty: {np.mean(prediction_results['epistemic_uncertainties']):.4f}\n")
+        f.write(f"  Mean aleatoric uncertainty: {np.mean(prediction_results['aleatoric_uncertainties']):.4f}\n")
+        f.write(f"  Mean total uncertainty: {np.mean(prediction_results['uncertainties']):.4f}\n\n")
+        
+        f.write("Uncertainty contribution ratios:\n")
+        epistemic_contrib = [e**2 / (e**2 + a**2) * 100 for e, a in 
+                           zip(prediction_results['epistemic_uncertainties'], 
+                               prediction_results['aleatoric_uncertainties'])]
+        aleatoric_contrib = [a**2 / (e**2 + a**2) * 100 for e, a in 
+                           zip(prediction_results['epistemic_uncertainties'], 
+                               prediction_results['aleatoric_uncertainties'])]
+        f.write(f"  Average epistemic contribution: {np.mean(epistemic_contrib):.1f}%\n")
+        f.write(f"  Average aleatoric contribution: {np.mean(aleatoric_contrib):.1f}%\n")
     
     print(f"Comprehensive report saved to: {os.path.join(output_dir, 'advanced_evaluation_results.txt')}")
     
