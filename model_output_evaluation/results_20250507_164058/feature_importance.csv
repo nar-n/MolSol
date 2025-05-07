@@ -1,0 +1,38 @@
+Feature,Category,Importance_Score
+Num_Hydrogen_Atoms,Atom Property,0.9178371810376349
+TPSA,Physicochemical,0.22998207841241614
+Polarity_Group,PhysChem Group,0.22998207841241614
+Graph_Structure,Graph Structure,0.18295658042037455
+Atomic_O+TPSA,Interaction,0.17319496827425263
+Atomic_O,Atomic,0.12643091293477748
+Atomic_C,Atomic,0.12478499766130657
+Atomic_C+TPSA,Interaction,0.11053699911413872
+Atomic_S,Atomic,0.11006332479487202
+Ring Systems_Group,PhysChem Group,0.05476658427477721
+Aromaticity,Atom Property,0.05158671592846842
+Molecular Size_Group,PhysChem Group,0.04621436440978299
+Atomic_N+TPSA,Interaction,0.04604339147583114
+Atomic_Cl,Atomic,0.045747829512659655
+Rotatable_Bonds,Physicochemical,0.0381053189934748
+Aliphatic_Rings,Physicochemical,0.034156491755537144
+Atomic_C+LogP,Interaction,0.023719191155842423
+H_Acceptors,Physicochemical,0.02309807220239679
+Atomic_Br,Atomic,0.018798398798732463
+Atomic_I,Atomic,0.015866444478115582
+Atomic_N,Atomic,0.014645233554498982
+Atomic_P,Atomic,0.014287130131762416
+Aromatic_Rings,Physicochemical,0.012715187970869568
+Atomic_O+LogP,Interaction,0.012400450182977418
+LogP,Physicochemical,0.009479757504262887
+Lipophilicity_Group,PhysChem Group,0.009479757504262887
+H-Bonding_Group,PhysChem Group,0.00906261242886619
+Molecular_Weight,Physicochemical,0.005554752306881183
+Formal_Charge,Atom Property,0.003553555269967923
+Radical_Electrons,Atom Property,0.0
+Bond_Single,Bond Type,0.0
+Bond_Double,Bond Type,0.0
+Bond_Triple,Bond Type,0.0
+Bond_Aromatic,Bond Type,0.0
+Atomic_H,Atomic,0.0
+Atomic_F,Atomic,-0.001129965887965767
+H_Donors,Physicochemical,-0.01702946476602296

@@ -71,29 +71,29 @@ class MolecularDescriptors:
     @staticmethod
     def get_descriptor_vector(descriptors):
         """
-        Convert descriptor dictionary to a torch tensor for model input
-        
-        Args:
-            descriptors: Dictionary of molecular descriptors
-            
-        Returns:
-            descriptor_vector: Torch tensor with descriptor values
+        Convert descriptor dictionary to a torch tensor with improved normalization
         """
         if descriptors is None:
             return None
             
-        # Select key descriptors most relevant for solubility
-        # These are approximately in order of importance for solubility prediction
-        keys = [
-            'normalized_logP',     # Most important for solubility
-            'normalized_tpsa',     # Polarity greatly affects solubility
-            'h_donors', 
-            'h_acceptors', 
-            'normalized_weight',
-            'rotatable_bonds',
-            'aromatic_rings',
-            'aliphatic_rings'
+        # Select key descriptors and apply consistent normalization
+        keys_and_norms = [
+            ('logP', lambda x: (x + 3) / 8),  # LogP typically -3 to +5
+            ('tpsa', lambda x: x / 150),      # TPSA typically 0 to 150
+            ('h_donors', lambda x: x / 6),    # H-donors typically 0 to 6
+            ('h_acceptors', lambda x: x / 10), # H-acceptors typically 0 to 10
+            ('mol_weight', lambda x: min(x / 500, 1.0)),  # MW scale with cap at 500
+            ('rotatable_bonds', lambda x: min(x / 10, 1.0)),  # Rotatable bonds 0-10
+            ('aromatic_rings', lambda x: min(x / 5, 1.0)),   # Aromatic rings 0-5
+            ('aliphatic_rings', lambda x: min(x / 3, 1.0))  # Aliphatic rings 0-3
         ]
         
-        values = [descriptors[k] for k in keys]
+        # Apply normalizations
+        values = []
+        for key, norm_func in keys_and_norms:
+            if key in descriptors:
+                values.append(norm_func(descriptors[key]))
+            else:
+                values.append(0.0)  # Default if missing
+        
         return torch.tensor(values, dtype=torch.float).view(1, -1)

@@ -1,0 +1,148 @@
+GNNSol Molecular Solubility Prediction Results with Uncertainty Quantification
+==========================================================================
+Run date: 2025-05-07 16:43:41
+
+1. MODEL ARCHITECTURE AND FEATURES
+================================
+
+Model Architecture:
+  Combined Graph Neural Network with PyTorch Geometric
+  Encoder: GNN layers with residual connections and global pooling
+  Uncertainty quantification using Monte Carlo Dropout (Bayesian) and residual-based (frequentist) approaches
+
+Molecular Graph Features:
+  - Atoms: H, C, N, O, F, P, S, Cl, Br, I (one-hot encoded)
+  - Formal charge
+  - Radical electrons
+  - Aromaticity
+  - Number of attached hydrogens
+
+Physicochemical Features:
+  - LogP (octanol-water partition coefficient)
+  - TPSA (topological polar surface area)
+  - Hydrogen bond donors/acceptors
+  - Molecular weight
+  - Rotatable bonds
+  - Aromatic and aliphatic rings
+
+2. TRAINING PERFORMANCE
+====================
+
+Training metrics:
+  RMSE: 0.8170
+  MAE: 0.6367
+  R²: 0.8521
+
+Test metrics:
+  RMSE: 0.9896
+  MAE: 0.7811
+  R²: 0.7529
+
+3. CROSS-VALIDATION RESULTS
+=========================
+
+Training approach: Up to 32.7 epochs with early stopping
+
+Fold 1:
+  Best Epoch: 30
+  Best Validation Loss: 1.0910
+  Validation RMSE: 1.0445
+  Validation MAE: 0.8538
+  Validation R²: 0.7556
+
+Fold 2:
+  Best Epoch: 18
+  Best Validation Loss: 1.1846
+  Validation RMSE: 1.0884
+  Validation MAE: 0.8392
+  Validation R²: 0.6665
+
+Fold 3:
+  Best Epoch: 50
+  Best Validation Loss: 0.9634
+  Validation RMSE: 0.9815
+  Validation MAE: 0.8258
+  Validation R²: 0.7492
+
+Average metrics across folds:
+  Best Epoch: 32.7
+  Validation RMSE: 1.0382
+  Validation MAE: 0.8396
+  Validation R²: 0.7238
+  Cross-validation time: 25.69 seconds
+
+4. FEATURE IMPORTANCE
+===================
+
+Top 10 Most Important Features:
+  1. Num_Hydrogen_Atoms (Atom Property): 0.9178
+  2. TPSA (Physicochemical): 0.2300
+  3. Polarity_Group (PhysChem Group): 0.2300
+  4. Graph_Structure (Graph Structure): 0.1830
+  5. Atomic_O+TPSA (Interaction): 0.1732
+  6. Atomic_O (Atomic): 0.1264
+  7. Atomic_C (Atomic): 0.1248
+  8. Atomic_C+TPSA (Interaction): 0.1105
+  9. Atomic_S (Atomic): 0.1101
+  10. Ring Systems_Group (PhysChem Group): 0.0548
+
+See 'feature_importance_plot.png' for visualization
+
+5. UNSEEN PREDICTION SET RESULTS
+=============================
+
+Unseen prediction set metrics:
+  RMSE: 0.8168
+  MAE: 0.5409
+  R²: 0.8724
+
+6. UNCERTAINTY QUANTIFICATION
+==========================
+
+Uncertainty Calibration Metrics:
+  % within 68% CI: 0.80 (ideal: 0.68)
+  % within 95% CI: 0.96 (ideal: 0.95)
+  % within 99% CI: 1.00 (ideal: 0.99)
+  Calibration error: 0.0470
+
+Dynamic per-sample uncertainty estimation was used, with both components:
+  - Epistemic uncertainty: Model uncertainty from MC dropout
+  - Aleatoric uncertainty: Data uncertainty estimated dynamically
+
+Average uncertainty metrics:
+  Mean epistemic uncertainty: 0.2575
+  Mean aleatoric uncertainty: 0.3603
+  Mean total uncertainty: 0.4475
+
+Uncertainty contribution ratios:
+  Average epistemic contribution: 33.3%
+  Average aleatoric contribution: 66.7%
+
+7. SAMPLE PREDICTIONS WITH UNCERTAINTY
+==================================
+
+Compound ID: cis-2-Pentene
+  Actual: -2.5400, Predicted: -2.2464, Error: 0.2936
+  Uncertainty (std): 0.3980, 95% CI: [-3.0264, -1.4663]
+  Epistemic uncertainty: 0.2615, Aleatoric uncertainty: 0.3000
+
+Compound ID: 5-(3-Methyl-2-butenyl)-5-ethylbarbital
+  Actual: -2.2530, Predicted: -2.3413, Error: 0.0883
+  Uncertainty (std): 0.3410, 95% CI: [-3.0097, -1.6729]
+  Epistemic uncertainty: 0.1622, Aleatoric uncertainty: 0.3000
+
+Compound ID: Terbacil
+  Actual: -2.4840, Predicted: -2.5200, Error: 0.0360
+  Uncertainty (std): 0.3620, 95% CI: [-3.2296, -1.8104]
+  Epistemic uncertainty: 0.2027, Aleatoric uncertainty: 0.3000
+
+Compound ID: trans-2-Pentene 
+  Actual: -2.5400, Predicted: -2.1363, Error: 0.4037
+  Uncertainty (std): 0.3802, 95% CI: [-2.8814, -1.3911]
+  Epistemic uncertainty: 0.2335, Aleatoric uncertainty: 0.3000
+
+Compound ID: P,P'-DDD
+  Actual: -7.2000, Predicted: -6.2772, Error: 0.9228
+  Uncertainty (std): 0.5273, 95% CI: [-7.3108, -5.2437]
+  Epistemic uncertainty: 0.3268, Aleatoric uncertainty: 0.4139
+

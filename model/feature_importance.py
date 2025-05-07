@@ -114,50 +114,176 @@ def export_feature_importance_to_csv(model, X, y, output_dir):
     if hasattr(X[0], 'physchem') and X[0].physchem is not None:
         physchem_dim = X[0].physchem.shape[1] 
         
-        for pc_idx in range(physchem_dim):
-            feature_preds = []
-            feature_name = physchem_feature_names[pc_idx] if pc_idx < len(physchem_feature_names) else f"PhysChem_{pc_idx}"
-            category = "Physicochemical"
+        # New approach: Group-based perturbation for physicochemical features
+        if hasattr(X[0], 'physchem') and X[0].physchem is not None:
+            # 1. Analyze groups of related physicochemical features
+            physchem_groups = {
+                'Lipophilicity': [0],  # LogP
+                'Polarity': [1],  # TPSA
+                'H-Bonding': [2, 3],  # H-donors, H-acceptors
+                'Molecular Size': [4, 5],  # MW, rotatable bonds
+                'Ring Systems': [6, 7]  # Aromatic and aliphatic rings
+            }
             
-            # Calculate mean value for this physicochemical feature
-            pc_values = []
-            for data in X:
-                if hasattr(data, 'physchem') and data.physchem is not None:
-                    pc_values.append(data.physchem[0, pc_idx].item())
-            
-            pc_mean = np.mean(pc_values)
-            
-            # Make predictions with this physicochemical feature masked
-            with torch.no_grad():
-                for idx, (data, _) in enumerate(zip(X, y)):
-                    # Skip if no physchem features
-                    if not hasattr(data, 'physchem') or data.physchem is None:
-                        continue
-                        
-                    # Create a modified copy of the data
-                    modified_data = Data(
-                        x=data.x.clone(),
-                        edge_index=data.edge_index.clone(),
-                        edge_attr=data.edge_attr.clone() if hasattr(data, 'edge_attr') else None,
-                        physchem=data.physchem.clone(),
-                        y=data.y.clone() if hasattr(data, 'y') else None
-                    )
-                    
-                    # Modify the specific physicochemical feature
-                    modified_data.physchem[0, pc_idx] = pc_mean
-                    
-                    # Make prediction
-                    pred = model(modified_data)
-                    feature_preds.append(pred.item())
-            
-            # Calculate performance impact
-            if feature_preds:  # Only calculate if we have predictions
-                feature_rmse = np.sqrt(mean_squared_error(y, feature_preds))
-                importance_score = feature_rmse - baseline_rmse
+            # 2. Calculate importance for each group (synergistic effects)
+            for group_name, feature_indices in physchem_groups.items():
+                feature_preds = []
+                category = "PhysChem Group"
                 
-                all_features.append(feature_name)
-                all_scores.append(importance_score)
-                all_categories.append(category)
+                # Calculate mean values for all indices in this group
+                group_means = []
+                for pc_idx in feature_indices:
+                    values = []
+                    for data in X:
+                        if hasattr(data, 'physchem') and data.physchem is not None:
+                            values.append(data.physchem[0, pc_idx].item())
+                    group_means.append(np.mean(values))
+                
+                # Make predictions with this group masked
+                with torch.no_grad():
+                    for idx, (data, _) in enumerate(zip(X, y)):
+                        if not hasattr(data, 'physchem') or data.physchem is None:
+                            continue
+                            
+                        # Create modified copy
+                        modified_data = Data(
+                            x=data.x.clone(),
+                            edge_index=data.edge_index.clone(),
+                            edge_attr=data.edge_attr.clone() if hasattr(data, 'edge_attr') else None,
+                            physchem=data.physchem.clone(),
+                            y=data.y.clone() if hasattr(data, 'y') else None
+                        )
+                        
+                        # Modify all features in this group
+                        for i, pc_idx in enumerate(feature_indices):
+                            modified_data.physchem[0, pc_idx] = group_means[i]
+                        
+                        # Make prediction
+                        pred = model(modified_data)
+                        feature_preds.append(pred.item())
+                
+                # Calculate performance impact
+                if feature_preds:
+                    group_rmse = np.sqrt(mean_squared_error(y, feature_preds))
+                    importance_score = group_rmse - baseline_rmse
+                    
+                    all_features.append(f"{group_name}_Group")
+                    all_scores.append(importance_score)
+                    all_categories.append(category)
+            
+            # 3. Analyze individual physicochemical descriptors as before
+            for pc_idx in range(physchem_dim):
+                feature_preds = []
+                feature_name = physchem_feature_names[pc_idx] if pc_idx < len(physchem_feature_names) else f"PhysChem_{pc_idx}"
+                category = "Physicochemical"
+                
+                # Calculate mean value for this physicochemical feature
+                pc_values = []
+                for data in X:
+                    if hasattr(data, 'physchem') and data.physchem is not None:
+                        pc_values.append(data.physchem[0, pc_idx].item())
+                
+                pc_mean = np.mean(pc_values)
+                
+                # Make predictions with this physicochemical feature masked
+                with torch.no_grad():
+                    for idx, (data, _) in enumerate(zip(X, y)):
+                        # Skip if no physchem features
+                        if not hasattr(data, 'physchem') or data.physchem is None:
+                            continue
+                            
+                        # Create a modified copy of the data
+                        modified_data = Data(
+                            x=data.x.clone(),
+                            edge_index=data.edge_index.clone(),
+                            edge_attr=data.edge_attr.clone() if hasattr(data, 'edge_attr') else None,
+                            physchem=data.physchem.clone(),
+                            y=data.y.clone() if hasattr(data, 'y') else None
+                        )
+                        
+                        # Modify the specific physicochemical feature
+                        modified_data.physchem[0, pc_idx] = pc_mean
+                        
+                        # Make prediction
+                        pred = model(modified_data)
+                        feature_preds.append(pred.item())
+                
+                # Calculate performance impact
+                if feature_preds:  # Only calculate if we have predictions
+                    feature_rmse = np.sqrt(mean_squared_error(y, feature_preds))
+                    importance_score = feature_rmse - baseline_rmse
+                    
+                    all_features.append(feature_name)
+                    all_scores.append(importance_score)
+                    all_categories.append(category)
+        
+        # Add cross-feature interaction analysis for key atom-physchem pairs
+        if hasattr(X[0], 'physchem') and X[0].physchem is not None:
+            # Analyze interactions between atom types and physiochemical properties
+            key_atom_indices = [1, 2, 3]  # C, N, O atoms
+            key_physchem_indices = [0, 1]  # LogP, TPSA
+            
+            for atom_idx in key_atom_indices:
+                for pc_idx in key_physchem_indices:
+                    feature_preds = []
+                    atom_name = atom_feature_names[atom_idx]
+                    pc_name = physchem_feature_names[pc_idx]
+                    feature_name = f"{atom_name}+{pc_name}"
+                    category = "Interaction"
+                    
+                    # Calculate mean values
+                    atom_values = []
+                    pc_values = []
+                    
+                    for data in X:
+                        atom_values.extend(data.x[:, atom_idx].tolist())
+                        if hasattr(data, 'physchem') and data.physchem is not None:
+                            pc_values.append(data.physchem[0, pc_idx].item())
+                    
+                    atom_mean = np.mean(atom_values)
+                    pc_mean = np.mean(pc_values)
+                    
+                    # Make predictions with both features masked
+                    with torch.no_grad():
+                        for idx, (data, _) in enumerate(zip(X, y)):
+                            if not hasattr(data, 'physchem') or data.physchem is None:
+                                continue
+                                
+                            # Create modified copy
+                            modified_data = Data(
+                                x=data.x.clone(),
+                                edge_index=data.edge_index.clone(),
+                                edge_attr=data.edge_attr.clone() if hasattr(data, 'edge_attr') else None,
+                                physchem=data.physchem.clone(),
+                                y=data.y.clone() if hasattr(data, 'y') else None
+                            )
+                            
+                            # Modify both features
+                            modified_data.x[:, atom_idx] = atom_mean
+                            modified_data.physchem[0, pc_idx] = pc_mean
+                            
+                            # Make prediction
+                            pred = model(modified_data)
+                            feature_preds.append(pred.item())
+                    
+                    # Calculate interaction importance
+                    if feature_preds:
+                        interaction_rmse = np.sqrt(mean_squared_error(y, feature_preds))
+                        
+                        # Get individual importance scores
+                        atom_score = next((score for i, (feat, score) in enumerate(zip(all_features, all_scores)) 
+                                         if feat == atom_name), 0)
+                        pc_score = next((score for i, (feat, score) in enumerate(zip(all_features, all_scores))
+                                       if feat == pc_name), 0)
+                        
+                        # Calculate synergy score (interaction effect beyond individual effects)
+                        synergy_score = interaction_rmse - baseline_rmse - atom_score - pc_score
+                        
+                        # Only add if synergy is significant
+                        if abs(synergy_score) > 0.01:  # threshold
+                            all_features.append(feature_name)
+                            all_scores.append(synergy_score)
+                            all_categories.append(category)
     
     # 3. Analyze edge features (bond types)
     if hasattr(X[0], 'edge_attr') and X[0].edge_attr is not None and X[0].edge_attr.shape[1] > 0:
@@ -286,7 +412,9 @@ def plot_feature_importance(df, output_dir):
         'Atom Property': '#ff7f0e',  # Orange
         'Bond Type': '#2ca02c',      # Green
         'Graph Structure': '#d62728', # Red
-        'Physicochemical': '#9467bd'  # Purple
+        'Physicochemical': '#9467bd',  # Purple
+        'PhysChem Group': '#e377c2',  # Pink
+        'Interaction': '#17becf'     # Cyan
     }
     
     # Create default color for any other categories
@@ -326,3 +454,70 @@ def plot_feature_importance(df, output_dir):
     plt.close()
     
     print(f"Feature importance plot saved to {plot_path}")
+    
+    # Create a separate visualization for physicochemical features to highlight their contribution
+    physchem_df = df[df['Category'].isin(['Physicochemical', 'PhysChem Group', 'Interaction'])]
+    
+    if not physchem_df.empty:
+        plt.figure(figsize=(12, 6))
+        
+        # Sort by importance
+        physchem_df = physchem_df.sort_values('Importance_Score', ascending=True)
+        
+        # Color map for different categories
+        category_colors = {
+            'Physicochemical': '#9467bd',
+            'PhysChem Group': '#e377c2',
+            'Interaction': '#17becf'
+        }
+        
+        colors = [category_colors.get(cat, '#bcbd22') for cat in physchem_df['Category']]
+        
+        # Create bar chart
+        bars = plt.barh(physchem_df['Feature'], physchem_df['Importance_Score'], color=colors)
+        
+        # Add feature importance values as text labels
+        for bar in bars:
+            width = bar.get_width()
+            plt.text(
+                width + 0.005,
+                bar.get_y() + bar.get_height()/2,
+                f'{width:.3f}',
+                va='center'
+            )
+        
+        plt.axvline(x=0, color='gray', linestyle='--', alpha=0.7)
+        
+        # Create legend
+        unique_categories = physchem_df['Category'].unique()
+        legend_handles = [plt.Rectangle((0,0),1,1, color=category_colors.get(cat, '#bcbd22'))
+                        for cat in unique_categories]
+        plt.legend(legend_handles, unique_categories, loc='best')
+        
+        plt.title('Physicochemical Feature Importance (Including Interactions)', fontsize=14)
+        plt.xlabel('Importance Score (Change in RMSE)', fontsize=12)
+        plt.tight_layout()
+        
+        # Save physchem-focused plot
+        pc_plot_path = os.path.join(output_dir, 'physchem_importance_plot.png')
+        plt.savefig(pc_plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"Physicochemical feature importance plot saved to {pc_plot_path}")
+
+# Add a new function to calculate the normalized contribution of feature types
+def analyze_feature_contribution_by_type(df):
+    """
+    Analyze overall contribution by feature type
+    """
+    # Group by category and sum absolute importance scores
+    category_contrib = df.groupby('Category')['Importance_Score'].apply(lambda x: sum(abs(v) for v in x)).reset_index()
+    
+    # Calculate percentage contribution
+    total_importance = category_contrib['Importance_Score'].sum()
+    category_contrib['Percentage'] = category_contrib['Importance_Score'] / total_importance * 100
+    
+    # Sort by importance
+    category_contrib = category_contrib.sort_values('Importance_Score', ascending=False)
+    
+    return category_contrib
