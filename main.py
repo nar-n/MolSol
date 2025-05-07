@@ -37,6 +37,7 @@ from model.gnn_encoder import GNNEncoder
 from model.property_predictor import MoleculeGNN
 from model.uncertainty import UncertaintyQuantifier  # Import from the new file
 from model.feature_importance import export_feature_importance_to_csv
+from model.cross_validation import perform_cross_validation
 
 # %% Advanced Evaluation Techniques
 class ModelEvaluator:
@@ -510,6 +511,83 @@ def main():
     print("\n3. Training model on ESOL dataset with our modular GNN architecture...")
     model, train_metrics, test_metrics, best_model_state, X_test, y_test = train_solubility_model(train_df, output_dir=output_dir)
     
+    print("\n3.5. Performing 2-fold cross-validation with 3x10 epochs...")
+
+    # Get the input dimension from X_test more reliably
+    # Extract features directly from data for cross-validation
+    model_params = {}
+    
+    # Try multiple methods to get input_dim
+    try:
+        # Method 1: Get from existing model
+        if hasattr(model.encoder, 'input_dim'):
+            model_params['input_dim'] = model.encoder.input_dim
+        elif hasattr(model, 'input_dim'):
+            model_params['input_dim'] = model.input_dim
+        
+        # Method 2: Extract from test data
+        if 'input_dim' not in model_params and X_test:
+            if hasattr(X_test[0], 'x') and X_test[0].x is not None:
+                model_params['input_dim'] = X_test[0].x.shape[1]
+        
+        # Method 3: Process a sample molecule from the training dataset
+        if 'input_dim' not in model_params:
+            converter = SMILESToGraph()
+            sample_smiles = train_df['smiles'].iloc[0]
+            sample_data = converter.convert(sample_smiles)
+            if sample_data is not None and hasattr(sample_data, 'x'):
+                model_params['input_dim'] = sample_data.x.shape[1]
+    
+    except Exception as e:
+        print(f"Warning: Error determining input_dim: {str(e)}")
+    
+    # Fallback: Use the default value from the model construction above
+    if 'input_dim' not in model_params:
+        print("Warning: Could not determine input_dim automatically, using default value")
+        model_params['input_dim'] = 14  # Default value based on SMILESToGraph class (10 atom types + 4 additional features)
+    
+    # Add other necessary parameters
+    model_params['hidden_dim'] = 128
+    model_params['latent_dim'] = 64
+    model_params['n_tasks'] = 1
+    model_params['gnn_type'] = 'GCN'
+    
+    print(f"Using model parameters for cross-validation: {model_params}")
+
+    # Switch to using X_test instead of train_df for cross-validation
+    cv_results = perform_cross_validation(
+        model_class=type(model),
+        train_dataset=X_test,  # Use the processed data objects
+        n_folds=2,
+        epochs=10,           # 10 epochs per repetition
+        n_repetitions=3,     # 3 repetitions
+        device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
+        learning_rate=0.001,
+        batch_size=64,
+        output_dir=output_dir,
+        model_params=model_params
+    )
+
+    # Update the final report to include cross-validation results
+    with open(os.path.join(output_dir, 'advanced_evaluation_results.txt'), 'a') as f:
+        f.write("\n\n")
+        f.write("2-FOLD CROSS-VALIDATION RESULTS\n")
+        f.write("==============================\n\n")
+        f.write(f"Training approach: 3 repetitions of 10 epochs each\n\n")
+        
+        for fold, result in enumerate(cv_results['fold_results']):
+            f.write(f"Fold {fold+1}:\n")
+            f.write(f"  Best Validation Loss: {result['best_val_loss']:.4f}\n")
+            f.write(f"  Validation RMSE: {result['val_rmse']:.4f}\n")
+            f.write(f"  Validation MAE: {result['val_mae']:.4f}\n")
+            f.write(f"  Validation R²: {result['val_r2']:.4f}\n\n")
+        
+        f.write(f"Average metrics across folds:\n")
+        f.write(f"  Validation RMSE: {cv_results['avg_val_rmse']:.4f}\n")
+        f.write(f"  Validation MAE: {cv_results['avg_val_mae']:.4f}\n")
+        f.write(f"  Validation R²: {cv_results['avg_val_r2']:.4f}\n\n")
+        f.write(f"Cross-validation time: {cv_results['total_time']:.2f} seconds\n\n")
+
     # Step 4: Evaluate performance
     print("\n4. Evaluating model performance")
     print(f"Training metrics: RMSE={train_metrics['rmse']:.4f}, MAE={train_metrics['mae']:.4f}, R²={train_metrics['r2']:.4f}")
@@ -544,6 +622,11 @@ def main():
     print(f"  R²: {prediction_results['r2']:.4f}")
     print(f"  Uncertainty calibration error: {prediction_results['calibration_metrics']['calibration_error']:.4f}")
     
+    print("\nCross-validation results:")
+    print(f"  Avg Validation RMSE: {cv_results['avg_val_rmse']:.4f}")
+    print(f"  Avg Validation MAE: {cv_results['avg_val_mae']:.4f}")
+    print(f"  Avg Validation R²: {cv_results['avg_val_r2']:.4f}")
+
     # Generate prediction visualization with uncertainty
     print("\nGenerating unseen predictions visualization with uncertainty...")
     plt.figure(figsize=(10, 8))

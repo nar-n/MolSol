@@ -6,6 +6,7 @@ from torch_geometric.nn import GCNConv, GATConv, global_mean_pool
 class GNNEncoder(nn.Module):
     def __init__(self, input_dim, hidden_dim=64, latent_dim=32, gnn_type='GCN'):
         super(GNNEncoder, self).__init__()
+        self.input_dim = input_dim  # Store input_dim as an attribute
         self.latent_dim = latent_dim
         
         # Select GNN layer type

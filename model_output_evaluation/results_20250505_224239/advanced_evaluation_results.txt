@@ -1,0 +1,69 @@
+GNNSol Molecular Solubility Prediction Results with Uncertainty Quantification
+Run date: 2025-05-05 22:44:12
+
+Model Architecture:
+  Combined Graph Neural Network with PyTorch Geometric
+  Encoder: GNN layers with residual connections and global pooling
+  Uncertainty quantification using Monte Carlo Dropout (Bayesian) and residual-based (frequentist) approaches
+
+Molecular Graph Features:
+  - Atoms: H, C, N, O, F, P, S, Cl, Br, I (one-hot encoded)
+  - Formal charge
+  - Radical electrons
+  - Aromaticity
+  - Number of attached hydrogens
+
+Training metrics:
+  RMSE: 0.7612
+  MAE: 0.5440
+  R²: 0.8716
+
+Test metrics:
+  RMSE: 0.9221
+  MAE: 0.6587
+  R²: 0.7855
+
+Feature Importance (Top 5):
+  1. Num_Hydrogen_Atoms (Atom Property): 2.2218
+  2. Graph_Structure (Graph Structure): 1.9683
+  3. Atomic_C (Atomic): 1.4557
+  4. Aromaticity (Atom Property): 1.0885
+  5. Atomic_O (Atomic): 0.8754
+
+Unseen prediction set metrics:
+  RMSE: 1.0901
+  MAE: 0.7707
+  R²: 0.7727
+
+Uncertainty Calibration Metrics:
+  % within 68% CI: 0.88 (ideal: 0.68)
+  % within 95% CI: 0.96 (ideal: 0.95)
+  % within 99% CI: 1.00 (ideal: 0.99)
+  Calibration error: 0.0765
+
+Sample predictions with uncertainty:
+Molecule: CC/C=C\C
+  Actual: -2.5400, Predicted: -3.7903, Error: 1.2503
+  Uncertainty (std): 0.6577, 95% CI: [-5.0793, -2.5012]
+  Epistemic uncertainty: 0.2693, Aleatoric uncertainty: 0.6000
+
+Molecule: O=C1NC(=O)NC(=O)C1(CC)CC=C(C)C
+  Actual: -2.2530, Predicted: -2.1784, Error: 0.0746
+  Uncertainty (std): 0.6232, 95% CI: [-3.3999, -0.9569]
+  Epistemic uncertainty: 0.1685, Aleatoric uncertainty: 0.6000
+
+Molecule: Cc1[nH]c(=O)n(c(=O)c1Cl)C(C)(C)C
+  Actual: -2.4840, Predicted: -2.9728, Error: 0.4888
+  Uncertainty (std): 0.6550, 95% CI: [-4.2565, -1.6891]
+  Epistemic uncertainty: 0.2626, Aleatoric uncertainty: 0.6000
+
+Molecule: CC/C=C/C
+  Actual: -2.5400, Predicted: -3.8854, Error: 1.3454
+  Uncertainty (std): 0.6918, 95% CI: [-5.2412, -2.5296]
+  Epistemic uncertainty: 0.3443, Aleatoric uncertainty: 0.6000
+
+Molecule: ClC(Cl)C(c1ccc(Cl)cc1)c2ccc(Cl)cc2 
+  Actual: -7.2000, Predicted: -4.8983, Error: 2.3017
+  Uncertainty (std): 0.7044, 95% CI: [-6.2789, -3.5177]
+  Epistemic uncertainty: 0.3690, Aleatoric uncertainty: 0.6000
+
