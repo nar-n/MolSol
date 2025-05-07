@@ -1,0 +1,20 @@
+Feature,Category,Importance_Score
+Num_Hydrogen_Atoms,Atom Property,1.0114304448262812
+Atomic_O,Atomic,0.4111334553002597
+Graph_Structure,Graph Structure,0.3978467689932944
+Atomic_N,Atomic,0.19272547239894955
+Atomic_S,Atomic,0.13849746128609686
+Atomic_Cl,Atomic,0.10561204877738062
+Aromaticity,Atom Property,0.10226979304444717
+Atomic_C,Atomic,0.09778817997332401
+Atomic_P,Atomic,0.07014064981367418
+Atomic_Br,Atomic,0.0361177723532039
+Atomic_I,Atomic,0.018383593500247097
+Formal_Charge,Atom Property,0.003958057960312011
+Atomic_F,Atomic,0.0006291740004988888
+Radical_Electrons,Atom Property,0.0
+Bond_Single,Bond Type,0.0
+Bond_Double,Bond Type,0.0
+Bond_Triple,Bond Type,0.0
+Bond_Aromatic,Bond Type,0.0
+Atomic_H,Atomic,0.0

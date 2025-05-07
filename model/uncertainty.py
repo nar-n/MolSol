@@ -37,6 +37,10 @@ class UncertaintyQuantifier:
                 # Set encoder layers to train mode to enable dropout
                 self.base_model.encoder.train()
                 self.base_model.predictor.train()
+                # But keep batch norm layers in eval mode
+                for module in self.base_model.modules():
+                    if isinstance(module, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d)):
+                        module.eval()
                 return self.base_model(x)
         
         mc_model = MCDropoutModel(model)
@@ -187,6 +191,19 @@ class UncertaintyQuantifier:
         Returns:
             calibration_scores: Dictionary with calibration metrics
         """
+        # Handle empty input case
+        if not predictions or len(predictions) == 0:
+            return {
+                'within_68_ci': 0.0,
+                'within_95_ci': 0.0,
+                'within_99_ci': 0.0,
+                'cal_error_68': 1.0,
+                'cal_error_95': 1.0,
+                'cal_error_99': 1.0,
+                'calibration_error': 1.0,
+                'standardized_residuals': []
+            }
+        
         # Calculate standardized residuals
         standardized_residuals = [(y_true - y_pred) / (uncertainty * 1.96) 
                                  for y_true, y_pred, uncertainty in 

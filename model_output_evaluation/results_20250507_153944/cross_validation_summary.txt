@@ -1,0 +1,31 @@
+CROSS-VALIDATION RESULTS
+=======================
+
+Fold 1:
+  Best Epoch: 27
+  Best Validation Loss: 1.4186
+  Validation RMSE: 1.1910
+  Validation MAE: 0.9826
+  Validation R²: 0.6822
+
+Fold 2:
+  Best Epoch: 23
+  Best Validation Loss: 0.9523
+  Validation RMSE: 0.9759
+  Validation MAE: 0.7640
+  Validation R²: 0.7319
+
+Fold 3:
+  Best Epoch: 13
+  Best Validation Loss: 1.2355
+  Validation RMSE: 1.1115
+  Validation MAE: 0.9472
+  Validation R²: 0.6783
+
+Average across folds:
+  Best Epoch: 21.0
+  Validation RMSE: 1.0928
+  Validation MAE: 0.8979
+  Validation R²: 0.6975
+
+Total cross-validation time: 16.18 seconds

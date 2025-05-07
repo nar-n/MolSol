@@ -1,6 +1,7 @@
 import torch
 from rdkit import Chem
 from torch_geometric.data import Data
+from model.molecular_descriptors import MolecularDescriptors
 
 class SMILESToGraph:
     def __init__(self):
@@ -10,14 +11,31 @@ class SMILESToGraph:
             self.atomic_numbers[atom_symbol] = i
             
     def convert(self, smiles):
-        """Convert a SMILES string to a graph representation"""
+        """Convert a SMILES string to a graph representation with physicochemical descriptors"""
         try:
+            # First try with standard SMILES parsing
             mol = Chem.MolFromSmiles(smiles)
+            
+            # If the first attempt failed, try sanitizing the molecule
             if mol is None:
+                print(f"Warning: Initial parsing failed for {smiles}, trying with sanitization...")
+                mol = Chem.MolFromSmiles(smiles, sanitize=False)
+                if mol is not None:
+                    try:
+                        Chem.SanitizeMol(mol)
+                    except Exception as e:
+                        print(f"Sanitization failed: {e}")
+            
+            if mol is None:
+                print(f"Failed to parse SMILES: {smiles}")
                 return None
                 
             # Get node features
             num_atoms = mol.GetNumAtoms()
+            if num_atoms == 0:
+                print(f"Warning: Molecule has no atoms: {smiles}")
+                return None
+                
             features = torch.zeros(num_atoms, len(self.atomic_numbers) + 4)  # Atomic number + additional features
             
             for atom_idx in range(num_atoms):
@@ -60,21 +78,32 @@ class SMILESToGraph:
                 dst.extend([j, i])
                 edge_attr.extend([bond_feature, bond_feature])
             
-            edge_index = torch.tensor([src, dst], dtype=torch.long)
-            if len(edge_attr) > 0:
-                edge_attr = torch.tensor(edge_attr, dtype=torch.float)
-            else:
+            # If no bonds, create a graph with no edges
+            if not src:
+                edge_index = torch.zeros((2, 0), dtype=torch.long)
                 edge_attr = torch.zeros((0, 4), dtype=torch.float)
+            else:
+                edge_index = torch.tensor([src, dst], dtype=torch.long)
+                edge_attr = torch.tensor(edge_attr, dtype=torch.float)
+                
+            # Calculate physicochemical descriptors
+            descriptors = MolecularDescriptors.calculate_descriptors(mol)
+            physchem_features = MolecularDescriptors.get_descriptor_vector(descriptors)
             
-            # Create PyG data object
+            if physchem_features is None:
+                print(f"Warning: Could not calculate descriptors for {smiles}")
+                physchem_features = torch.zeros(1, 8)  # Default to zeros if calculation fails
+            
+            # Create PyG data object with both graph features and physicochemical descriptors
             data = Data(
                 x=features, 
                 edge_index=edge_index,
                 edge_attr=edge_attr,
+                physchem=physchem_features,  # Add physicochemical descriptors
                 smiles=smiles
             )
             
             return data
         except Exception as e:
-            print(f"Error converting SMILES {smiles}: {e}")
+            print(f"Error converting SMILES {smiles}: {str(e)}")
             return None

@@ -1,0 +1,32 @@
+
+
+CROSS-VALIDATION RESULTS
+========================
+
+Training approach: Up to 23.3 epochs with early stopping
+
+Fold 1:
+  Best Validation Loss: 1.0663
+  Validation RMSE: 1.0326
+  Validation MAE: 0.8665
+  Validation R²: 0.7611
+
+Fold 2:
+  Best Validation Loss: 1.2348
+  Validation RMSE: 1.1112
+  Validation MAE: 0.8287
+  Validation R²: 0.6524
+
+Fold 3:
+  Best Validation Loss: 0.9773
+  Validation RMSE: 0.9886
+  Validation MAE: 0.8588
+  Validation R²: 0.7456
+
+Average metrics across folds:
+  Validation RMSE: 1.0441
+  Validation MAE: 0.8514
+  Validation R²: 0.7197
+
+Cross-validation time: 17.73 seconds
+

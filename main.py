@@ -173,6 +173,27 @@ class ModelEvaluator:
             'overall_metrics': overall_metrics
         }
 
+# Add a new function to load a model with compatible batch norm layers
+def load_model_for_inference(model_state_dict):
+    """Load a model from state_dict and make it compatible for single-sample inference"""
+    from model.batch_norm_utils import replace_bn_with_single_bn
+    
+    # Create a new model instance
+    input_dim = 14  # Default value, will be overridden by state_dict
+    model = MoleculeGNN(input_dim=input_dim, hidden_dim=192, latent_dim=96, 
+                        n_tasks=1, gnn_type='GCN', dropout=0.25)
+    
+    # Load the state dictionary
+    model.load_state_dict(model_state_dict)
+    
+    # Replace BatchNorm layers with SingleBatchNorm layers
+    model = replace_bn_with_single_bn(model)
+    
+    # Set to eval mode
+    model.eval()
+    
+    return model
+
 # %% Load ESOL Dataset
 def load_esol_dataset():
     """Load the ESOL dataset for molecular solubility prediction"""
@@ -205,12 +226,18 @@ def load_esol_dataset():
 # %% Predict Unseen Molecules
 def predict_unseen_molecules(model, prediction_df, output_dir=None):
     """Predict solubility for unseen molecules with uncertainty quantification"""
+    # Convert regular model to inference model with SingleBatchNorm if needed
+    from model.batch_norm_utils import replace_bn_with_single_bn
+    inference_model = replace_bn_with_single_bn(model)
+    inference_model.eval()
+    
     converter = SMILESToGraph()
     solubility_col = 'solubility'
     
     predicted_values = []
     actual_values = []
     smiles_list = []
+    compound_ids = []  # Store compound IDs
     failed_molecules = []
     
     # For uncertainty quantification
@@ -225,14 +252,28 @@ def predict_unseen_molecules(model, prediction_df, output_dir=None):
         try:
             smiles = row['smiles']
             actual_solubility = row[solubility_col]
+            compound_id = row['Compound ID']  # Extract compound ID
             
             # Convert SMILES to PyG data object
             data = converter.convert(smiles)
-            if data is not None:
-                # Make prediction with uncertainty - use None for residual_std to enable dynamic estimation
+            
+            # Debug the graph conversion
+            if data is None:
+                print(f"Warning: Failed to convert SMILES to graph: {smiles}")
+                failed_molecules.append((compound_id, "Could not convert to graph"))
+                continue
+            
+            # Check if the graph has any nodes
+            if data.x.shape[0] == 0:
+                print(f"Warning: Molecule has no atoms: {smiles}")
+                failed_molecules.append((compound_id, "Molecule has no atoms"))
+                continue
+                
+            # Make prediction with uncertainty
+            try:
                 mean_pred, total_std, ci_lower, ci_upper, epistemic_std, aleatoric_std = (
                     UncertaintyQuantifier.combined_uncertainty(
-                        model, data, residual_std=None, n_samples=30
+                        inference_model, data, residual_std=None, n_samples=30
                     )
                 )
                 
@@ -240,22 +281,50 @@ def predict_unseen_molecules(model, prediction_df, output_dir=None):
                 predicted_values.append(mean_pred)
                 actual_values.append(actual_solubility)
                 smiles_list.append(smiles)
+                compound_ids.append(compound_id)  # Store compound ID
                 uncertainties.append(total_std)
                 confidence_intervals.append((ci_lower, ci_upper))
                 epistemic_uncertainties.append(epistemic_std)
                 aleatoric_uncertainties.append(aleatoric_std)
-            else:
-                failed_molecules.append((smiles, "Could not convert to graph"))
+            except Exception as e:
+                print(f"Error predicting molecule {compound_id}: {str(e)}")
+                failed_molecules.append((compound_id, f"Prediction error: {str(e)}"))
         except Exception as e:
-            failed_molecules.append((smiles, str(e)))
+            print(f"Error processing molecule {row['Compound ID']}: {str(e)}")
+            failed_molecules.append((row['Compound ID'], str(e)))
     
     print(f"Successfully predicted {len(predicted_values)} molecules with uncertainty")
     print(f"Failed to predict {len(failed_molecules)} molecules")
     
+    # Check if we have any successful predictions
+    if len(predicted_values) == 0:
+        print("No successful predictions! Check the SMILES processing and model compatibility")
+        # Return empty results with default values
+        return {
+            'predicted': [],
+            'actual': [],
+            'smiles': [],
+            'compound_ids': [],  # Add compound IDs
+            'rmse': 0.0,
+            'mae': 0.0,
+            'r2': 0.0,
+            'failed': failed_molecules,
+            'uncertainties': [],
+            'confidence_intervals': [],
+            'epistemic_uncertainties': [],
+            'aleatoric_uncertainties': [],
+            'calibration_metrics': {
+                'within_68_ci': 0.0,
+                'within_95_ci': 0.0,
+                'within_99_ci': 0.0,
+                'calibration_error': 1.0
+            }
+        }
+    
     # Sample of predictions with uncertainty
     print("\nSample predictions with uncertainty (both components):")
     for i in range(min(5, len(predicted_values))):
-        print(f"Molecule: {smiles_list[i]}")
+        print(f"Molecule: {compound_ids[i]} ({smiles_list[i]})")  # Use compound ID in output
         print(f"  Actual: {actual_values[i]:.4f}, Predicted: {predicted_values[i]:.4f}, "
               f"Error: {abs(actual_values[i] - predicted_values[i]):.4f}")
         print(f"  Total uncertainty (std): {uncertainties[i]:.4f}, 95% CI: [{confidence_intervals[i][0]:.4f}, {confidence_intervals[i][1]:.4f}]")
@@ -288,11 +357,12 @@ def predict_unseen_molecules(model, prediction_df, output_dir=None):
     mae = mean_absolute_error(actual_values, predicted_values)
     r2 = r2_score(actual_values, predicted_values)
     
-    # Return results
+    # Return results with compound IDs
     return {
         'predicted': predicted_values,
         'actual': actual_values,
         'smiles': smiles_list,
+        'compound_ids': compound_ids,  # Include compound IDs in output
         'rmse': rmse,
         'mae': mae,
         'r2': r2,
@@ -305,7 +375,7 @@ def predict_unseen_molecules(model, prediction_df, output_dir=None):
     }
 
 # %% Train Solubility Model
-def train_solubility_model(train_df, epochs=300, batch_size=32, output_dir=None):
+def train_solubility_model(train_df, epochs=400, batch_size=32, output_dir=None):
     """Train the GNN model on training data"""
     converter = SMILESToGraph()
     solubility_col = 'solubility'  # We renamed it in load_esol_dataset
@@ -343,21 +413,24 @@ def train_solubility_model(train_df, epochs=300, batch_size=32, output_dir=None)
     
     print(f"Train: {len(X_train)}, Validation: {len(X_val)}, Test: {len(X_test)} molecules")
     
-    # Create model
+    # Create model with improved architecture
     input_dim = X_train[0].x.shape[1]
-    model = MoleculeGNN(input_dim=input_dim, hidden_dim=128, latent_dim=64, n_tasks=1, gnn_type='GCN')
+    model = MoleculeGNN(input_dim=input_dim, hidden_dim=192, latent_dim=96, 
+                        n_tasks=1, gnn_type='GCN', dropout=0.25)
     
-    # Training setup
-    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=20, factor=0.5, verbose=True)
+    # Training setup with improved optimization
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.0005, weight_decay=2e-5)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, patience=20, factor=0.5, verbose=True, min_lr=1e-6
+    )
     loss_fn = torch.nn.MSELoss()
     
-    # Training loop
+    # Increase patience for early stopping
     train_losses = []
     val_losses = []
     best_model_state = None
     best_val_loss = float('inf')
-    patience = 30
+    patience = 40
     no_improve = 0
     
     print(f"Starting training for {epochs} epochs...")
@@ -520,8 +593,11 @@ def main():
     print("\n3. Training model on ESOL dataset with our modular GNN architecture...")
     model, train_metrics, test_metrics, best_model_state, X_test, y_test = train_solubility_model(train_df, output_dir=output_dir)
     
-    print("\n3.5. Performing 2-fold cross-validation with 3x10 epochs...")
-
+    # Convert to inference-compatible model for predictions
+    inference_model = load_model_for_inference(best_model_state)
+    
+    print("\n3.5. Performing cross-validation with improved parameters...")
+    
     # Get the input dimension from X_test more reliably
     # Extract features directly from data for cross-validation
     model_params = {}
@@ -555,24 +631,27 @@ def main():
         print("Warning: Could not determine input_dim automatically, using default value")
         model_params['input_dim'] = 14  # Default value based on SMILESToGraph class (10 atom types + 4 additional features)
     
-    # Add other necessary parameters
-    model_params['hidden_dim'] = 128
-    model_params['latent_dim'] = 64
+    # Add improved model parameters
+    model_params['hidden_dim'] = 192  # Increased from 128
+    model_params['latent_dim'] = 96   # Increased from 64
     model_params['n_tasks'] = 1
     model_params['gnn_type'] = 'GCN'
+    model_params['dropout'] = 0.25    # Added dropout parameter
     
-    print(f"Using model parameters for cross-validation: {model_params}")
+    print(f"Using improved model parameters for cross-validation: {model_params}")
 
     # Switch to using X_test instead of train_df for cross-validation
+    # with improved CV procedure and early stopping
     cv_results = perform_cross_validation(
         model_class=type(model),
         train_dataset=X_test,  # Use the processed data objects
-        n_folds=2,
-        epochs=10,           # 10 epochs per repetition
-        n_repetitions=3,     # 3 repetitions
+        n_folds=3,             # Increased from 2 to 3 folds
+        max_epochs=50,         # Maximum epochs
+        patience=10,           # Early stopping patience
+        min_epochs=20,         # Minimum epochs before early stopping
         device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
-        learning_rate=0.001,
-        batch_size=64,
+        learning_rate=0.0005,  # Lowered learning rate for stability
+        batch_size=32,         # Smaller batch size for better generalization
         output_dir=output_dir,
         model_params=model_params
     )
@@ -580,9 +659,9 @@ def main():
     # Update the final report to include cross-validation results
     with open(os.path.join(output_dir, 'advanced_evaluation_results.txt'), 'a') as f:
         f.write("\n\n")
-        f.write("2-FOLD CROSS-VALIDATION RESULTS\n")
-        f.write("==============================\n\n")
-        f.write(f"Training approach: 3 repetitions of 10 epochs each\n\n")
+        f.write("CROSS-VALIDATION RESULTS\n")
+        f.write("========================\n\n")
+        f.write(f"Training approach: Up to {cv_results['avg_best_epoch']:.1f} epochs with early stopping\n\n")
         
         for fold, result in enumerate(cv_results['fold_results']):
             f.write(f"Fold {fold+1}:\n")
@@ -612,7 +691,7 @@ def main():
     
     # Step 6: Predict solubility for unseen molecules with uncertainty
     print("\n6. Predicting solubility for unseen molecules with uncertainty quantification")
-    prediction_results = predict_unseen_molecules(model, prediction_df, output_dir)
+    prediction_results = predict_unseen_molecules(inference_model, prediction_df, output_dir)
     
     # Generate uncertainty calibration plots
     print("\nGenerating uncertainty calibration plots...")
@@ -704,11 +783,17 @@ def main():
     
     # Generate comprehensive report file
     print("\nGenerating comprehensive evaluation report...")
-    with open(os.path.join(output_dir, 'advanced_evaluation_results.txt'), 'w') as f:
+    report_path = os.path.join(output_dir, 'evaluation_report.txt')
+    
+    with open(report_path, 'w') as f:
+        # Report header
         f.write(f"GNNSol Molecular Solubility Prediction Results with Uncertainty Quantification\n")
+        f.write(f"==========================================================================\n")
         f.write(f"Run date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         
-        # Add model architecture and feature information
+        # SECTION 1: MODEL ARCHITECTURE AND FEATURES
+        f.write(f"1. MODEL ARCHITECTURE AND FEATURES\n")
+        f.write(f"================================\n\n")
         f.write(f"Model Architecture:\n")
         f.write(f"  Combined Graph Neural Network with PyTorch Geometric\n")
         f.write(f"  Encoder: GNN layers with residual connections and global pooling\n")
@@ -721,6 +806,17 @@ def main():
         f.write(f"  - Aromaticity\n")
         f.write(f"  - Number of attached hydrogens\n\n")
         
+        f.write(f"Physicochemical Features:\n")
+        f.write(f"  - LogP (octanol-water partition coefficient)\n")
+        f.write(f"  - TPSA (topological polar surface area)\n")
+        f.write(f"  - Hydrogen bond donors/acceptors\n")
+        f.write(f"  - Molecular weight\n")
+        f.write(f"  - Rotatable bonds\n")
+        f.write(f"  - Aromatic and aliphatic rings\n\n")
+        
+        # SECTION 2: TRAINING AND VALIDATION METRICS
+        f.write(f"2. TRAINING PERFORMANCE\n")
+        f.write(f"====================\n\n")
         f.write(f"Training metrics:\n")
         f.write(f"  RMSE: {train_metrics['rmse']:.4f}\n")
         f.write(f"  MAE: {train_metrics['mae']:.4f}\n")
@@ -731,39 +827,52 @@ def main():
         f.write(f"  MAE: {test_metrics['mae']:.4f}\n")
         f.write(f"  R²: {test_metrics['r2']:.4f}\n\n")
         
-        # Feature importance
-        f.write(f"Feature Importance (Top 5):\n")
-        for i, row in enumerate(feature_imp_df.head(5).itertuples(index=False)):
-            f.write(f"  {i+1}. {row.Feature} ({row.Category}): {row.Importance_Score:.4f}\n")
-        f.write("\n")
+        # SECTION 3: CROSS-VALIDATION RESULTS
+        f.write(f"3. CROSS-VALIDATION RESULTS\n")
+        f.write(f"=========================\n\n")
+        f.write(f"Training approach: Up to {cv_results['avg_best_epoch']:.1f} epochs with early stopping\n\n")
         
-        # Prediction results on unseen data
+        for fold, result in enumerate(cv_results['fold_results']):
+            f.write(f"Fold {fold+1}:\n")
+            f.write(f"  Best Epoch: {result['best_epoch']}\n")
+            f.write(f"  Best Validation Loss: {result['best_val_loss']:.4f}\n")
+            f.write(f"  Validation RMSE: {result['val_rmse']:.4f}\n")
+            f.write(f"  Validation MAE: {result['val_mae']:.4f}\n")
+            f.write(f"  Validation R²: {result['val_r2']:.4f}\n\n")
+        
+        f.write(f"Average metrics across folds:\n")
+        f.write(f"  Best Epoch: {cv_results['avg_best_epoch']:.1f}\n")
+        f.write(f"  Validation RMSE: {cv_results['avg_val_rmse']:.4f}\n")
+        f.write(f"  Validation MAE: {cv_results['avg_val_mae']:.4f}\n")
+        f.write(f"  Validation R²: {cv_results['avg_val_r2']:.4f}\n")
+        f.write(f"  Cross-validation time: {cv_results['total_time']:.2f} seconds\n\n")
+        
+        # SECTION 4: FEATURE IMPORTANCE
+        f.write(f"4. FEATURE IMPORTANCE\n")
+        f.write(f"===================\n\n")
+        
+        f.write(f"Top 10 Most Important Features:\n")
+        for i, row in enumerate(feature_imp_df.head(10).itertuples(index=False)):
+            f.write(f"  {i+1}. {row.Feature} ({row.Category}): {row.Importance_Score:.4f}\n")
+        f.write("\nSee 'feature_importance_plot.png' for visualization\n\n")
+        
+        # SECTION 5: UNSEEN PREDICTION SET RESULTS
+        f.write(f"5. UNSEEN PREDICTION SET RESULTS\n")
+        f.write(f"=============================\n\n")
         f.write(f"Unseen prediction set metrics:\n")
         f.write(f"  RMSE: {prediction_results['rmse']:.4f}\n")
         f.write(f"  MAE: {prediction_results['mae']:.4f}\n")
         f.write(f"  R²: {prediction_results['r2']:.4f}\n\n")
         
-        # Uncertainty calibration metrics
+        # SECTION 6: UNCERTAINTY QUANTIFICATION
+        f.write(f"6. UNCERTAINTY QUANTIFICATION\n")
+        f.write(f"==========================\n\n")
         f.write(f"Uncertainty Calibration Metrics:\n")
         f.write(f"  % within 68% CI: {prediction_results['calibration_metrics']['within_68_ci']:.2f} (ideal: 0.68)\n")
         f.write(f"  % within 95% CI: {prediction_results['calibration_metrics']['within_95_ci']:.2f} (ideal: 0.95)\n")
         f.write(f"  % within 99% CI: {prediction_results['calibration_metrics']['within_99_ci']:.2f} (ideal: 0.99)\n")
         f.write(f"  Calibration error: {prediction_results['calibration_metrics']['calibration_error']:.4f}\n\n")
         
-        # Sample predictions with uncertainty
-        f.write(f"Sample predictions with uncertainty:\n")
-        for i in range(min(5, len(prediction_results['smiles']))):
-            f.write(f"Molecule: {prediction_results['smiles'][i]}\n")
-            f.write(f"  Actual: {prediction_results['actual'][i]:.4f}, Predicted: {prediction_results['predicted'][i]:.4f}, ")
-            f.write(f"Error: {abs(prediction_results['actual'][i] - prediction_results['predicted'][i]):.4f}\n")
-            f.write(f"  Uncertainty (std): {prediction_results['uncertainties'][i]:.4f}, ")
-            f.write(f"95% CI: [{prediction_results['confidence_intervals'][i][0]:.4f}, {prediction_results['confidence_intervals'][i][1]:.4f}]\n")
-            f.write(f"  Epistemic uncertainty: {prediction_results['epistemic_uncertainties'][i]:.4f}, ")
-            f.write(f"Aleatoric uncertainty: {prediction_results['aleatoric_uncertainties'][i]:.4f}\n\n")
-        
-        # Detailed uncertainty analysis
-        f.write("\nDetailed Uncertainty Analysis:\n")
-        f.write("============================\n\n")
         f.write("Dynamic per-sample uncertainty estimation was used, with both components:\n")
         f.write("  - Epistemic uncertainty: Model uncertainty from MC dropout\n")
         f.write("  - Aleatoric uncertainty: Data uncertainty estimated dynamically\n\n")
@@ -781,9 +890,37 @@ def main():
                            zip(prediction_results['epistemic_uncertainties'], 
                                prediction_results['aleatoric_uncertainties'])]
         f.write(f"  Average epistemic contribution: {np.mean(epistemic_contrib):.1f}%\n")
-        f.write(f"  Average aleatoric contribution: {np.mean(aleatoric_contrib):.1f}%\n")
+        f.write(f"  Average aleatoric contribution: {np.mean(aleatoric_contrib):.1f}%\n\n")
+        
+        # SECTION 7: SAMPLE PREDICTIONS WITH UNCERTAINTY
+        f.write(f"7. SAMPLE PREDICTIONS WITH UNCERTAINTY\n")
+        f.write(f"==================================\n\n")
+        for i in range(min(5, len(prediction_results['compound_ids']))):  # Use compound_ids
+            f.write(f"Compound ID: {prediction_results['compound_ids'][i]}\n")  # Show Compound ID instead of SMILES
+            f.write(f"  Actual: {prediction_results['actual'][i]:.4f}, Predicted: {prediction_results['predicted'][i]:.4f}, ")
+            f.write(f"Error: {abs(prediction_results['actual'][i] - prediction_results['predicted'][i]):.4f}\n")
+            f.write(f"  Uncertainty (std): {prediction_results['uncertainties'][i]:.4f}, ")
+            f.write(f"95% CI: [{prediction_results['confidence_intervals'][i][0]:.4f}, {prediction_results['confidence_intervals'][i][1]:.4f}]\n")
+            f.write(f"  Epistemic uncertainty: {prediction_results['epistemic_uncertainties'][i]:.4f}, ")
+            f.write(f"Aleatoric uncertainty: {prediction_results['aleatoric_uncertainties'][i]:.4f}\n\n")
     
-    print(f"Comprehensive report saved to: {os.path.join(output_dir, 'advanced_evaluation_results.txt')}")
+    # Remove the old report files if they exist
+    old_report_path = os.path.join(output_dir, 'advanced_evaluation_results.txt')
+    cv_report_path = os.path.join(output_dir, 'cross_validation_summary.txt')
+    
+    if os.path.exists(old_report_path):
+        try:
+            os.remove(old_report_path)
+        except:
+            pass
+            
+    if os.path.exists(cv_report_path):
+        try:
+            os.remove(cv_report_path)
+        except:
+            pass
+    
+    print(f"Comprehensive evaluation report saved to: {report_path}")
     
     total_time = time.time() - start_time
     print(f"\nSolubility prediction completed in {total_time:.1f} seconds")
